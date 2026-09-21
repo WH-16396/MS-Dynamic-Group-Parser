@@ -46,7 +46,7 @@ pub fn parse_rulebuilder<'a>(raw: &'a str) -> Result<Dnf<'a>, Error<Rule>> {
     // Parses the syntax using the pest rules in 'membership_rules.pest' 
     let parse = SyntaxParser::parse(Rule::MembershipRules, raw);
 
-    println!("Rules: {:#?}", parse);
+    // println!("Rules: {:#?}", parse);
 
     let dnf = parse_tree(parse?.next().unwrap(), vec![Nodes::new()]);
 

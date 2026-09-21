@@ -30,7 +30,7 @@ Blank   = { "*" }
 
     StringWrapper    = _{ "\"" ~ String ~ "\"" }
         String      = @{ StringCharacter* }
-        StringCharacter = { !("\"" | "\\") ~ ANY }
+        StringCharacter = { !("\"" | "\n") ~ ANY }
 
     Number  = { '0'..'9' }
     Null    = @{ "$"? ~ ^"null" }
