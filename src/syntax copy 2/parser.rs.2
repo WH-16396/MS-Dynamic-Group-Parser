@@ -1,0 +1,128 @@
+use pest::{Parser, error::Error};
+use pest_derive::Parser;
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Syntax<'a> {
+    Brackets(Vec<Syntax<'a>>),
+    Rule(Vec<Syntax<'a>>),
+    Comparator(&'a str),
+    Object(&'a str),
+    Operator(&'a str),
+    String(&'a str),
+    Array(Vec<Syntax<'a>>),
+    Boolean(bool),
+    Null,
+}
+
+// #[derive(Parser)]
+// #[grammar = "syntax/membership_rules.pest"]
+// struct SyntaxParser;
+
+// pub fn parse_membership_rules(raw: &str) -> Result<Syntax<'_>, Error<Rule>> {
+//     let rules = SyntaxParser::parse(Rule::MembershipRules, raw)?.next().unwrap();
+
+//     println!("{:#?}", rules);
+
+//     use pest::iterators::Pair;
+
+//     fn parse_value(pair: Pair<Rule>) -> Syntax {
+//         match pair.as_rule() {
+//             Rule::Segment => Syntax::Brackets(pair.into_inner().map(parse_value).collect()),
+//             Rule::Comparator => Syntax::Comparator(pair.as_str()),
+//             Rule::Rule => Syntax::Rule(pair.into_inner().map(parse_value).collect()),
+//             Rule::Object => Syntax::Object(pair.as_str()),
+//             Rule::Operator => Syntax::Operator(pair.as_str()),
+//             Rule::string => Syntax::String(pair.into_inner().next().unwrap().as_str()),
+//             Rule::array => Syntax::Array(pair.into_inner().map(parse_value).collect()),
+//             Rule::boolean => Syntax::Boolean(pair.as_str().to_lowercase().parse().unwrap()),
+//             Rule::null => Syntax::Null,
+//             Rule::MembershipRules
+//             | Rule::EOI
+//             | Rule::Brackets
+//             | Rule::Value
+//             | Rule::string_inner
+//             | Rule::string_char
+//             | Rule::clean_inner
+//             | Rule::clean_char
+//             | Rule::WHITESPACE
+//             => { println!("ERROR - attempted to handle unconfigure rule: {:#?}", pair); unreachable!() },
+//         }
+//     }
+//     Ok(parse_value(rules))
+// }
+
+#[derive(Parser)]
+#[grammar = "syntax/membership_rules.pest"]
+struct SyntaxParser;
+
+pub fn parse_membership_rules(raw: &str) -> Result<Vec<Vec<Syntax<'_>>>, Error<Rule>> {
+    let rules = SyntaxParser::parse(Rule::MembershipRules, raw)?.next().unwrap();
+
+    // println!("{:#?}", rules);
+
+    use pest::iterators::Pair;
+
+    fn parse_tree<'a>(pair: Pair<'a, Rule>, mut matrix: Vec<Vec<Syntax<'a>>>) -> Vec<Vec<Syntax<'a>>> {
+
+        fn cross<'a>(left: Vec<Vec<Syntax<'a>>>, right: Vec<Vec<Syntax<'a>>>) -> Vec<Vec<Syntax<'a>>> {
+            let mut out = Vec::with_capacity(left.len() * right.len());
+            for l in &left {
+                for r in &right {
+                    let mut row = l.clone();
+                    row.extend(r.iter().cloned());
+                    out.push(row);
+                }
+            }
+            out
+        }
+        
+        match pair.as_rule() {
+            Rule::Segment => {
+
+                let mut tree = Vec::new();
+                let mut branch = vec![Vec::new()];
+                // Syntax::Brackets(pair.into_inner().map(|x| parse_tree(x)).collect())
+                for child in pair.into_inner() {
+                    match child.as_rule() {
+                        Rule::Comparator if child.as_str() == "or" => {
+                            tree.append(&mut branch);
+                            branch = vec![Vec::new()];
+                        },
+                        Rule::Comparator => {},
+                        Rule::Segment | Rule::Rule => branch = parse_tree(child, branch),
+                        _ => { println!("ERROR - parse_tree(), attempted to handle misconfigured rule: {:#?}", child); unreachable!() },
+                    }
+                }
+                tree.append(&mut branch);
+                matrix = cross(matrix, tree);
+            },
+            Rule::Rule => {
+                let rule = Syntax::Rule(pair.into_inner().map(parse_rule).collect());
+                for row in matrix.iter_mut() {
+                    row.push(rule.clone())
+                };
+            },
+            _ => { println!("ERROR - parse_tree(), attempted to handle misconfigured rule: {:#?}", pair); unreachable!() },
+        };
+        matrix
+    }
+
+    fn parse_rule(pair: Pair<Rule>) -> Syntax {
+        match pair.as_rule() {
+            Rule::Object => Syntax::Object(pair.as_str()),
+            Rule::Operator => Syntax::Operator(pair.as_str()),
+            Rule::string => Syntax::String(pair.into_inner().next().unwrap().as_str()),
+            Rule::array => Syntax::Array(pair.into_inner().map(parse_rule).collect()),
+            Rule::boolean => Syntax::Boolean(pair.as_str().to_lowercase().parse().unwrap()),
+            Rule::null => Syntax::Null,
+            _ => { println!("ERROR - parse_rule(), attempted to handle misconfigured rule: {:#?}", pair); unreachable!() },
+        }
+    }
+    let out = parse_tree(rules.clone(), vec![Vec::new()]);
+    println!("{:#?}", out);
+
+    Ok(out)
+
+    // Ok(parse_rule(rules))
+}

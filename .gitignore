@@ -1,0 +1,5 @@
+/target
+Cargo.lock
+
+# Azure Functions local dev settings (may contain secrets)
+local.settings.json

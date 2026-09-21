@@ -1,0 +1,88 @@
+use pest::{Parser, error::Error, iterators::Pair};
+use pest_derive::Parser;
+
+pub enum Syntax<'a> {
+    Brackets(Vec<Syntax<'a>>),
+    Rule(ParsedRule<'a>),
+    Array(Vec<Syntax<'a>>),
+    Comparator(&'a str),
+    // Operator(&'a str),
+    // Object(&'a str),
+    String(&'a str),
+    Boolean(bool),
+    Null,
+}
+
+pub enum ParsedRule<'a> {
+    Object(&'a str),
+    Operator(&'a str),
+    Value(Syntax<'a>),
+}
+
+#[derive(Parser)]
+#[grammar = "syntax/membership_rules.pest"]
+struct SyntaxParser;
+
+pub fn parse_membership_rules(raw: &str) -> Result<Syntax<'_>, Error<Rule>> {
+    let rules = SyntaxParser::parse(Rule::MembershipRules, raw)?.next().unwrap();
+
+    println!("{:#?}", rules);
+
+    use pest::iterators::Pair;
+
+    fn parse_value(pair: Pair<Rule>) -> Syntax {
+        match pair.as_rule() {
+            Rule::Segment => Syntax::Brackets(pair.into_inner().map(parse_value).collect()),
+            Rule::array => Syntax::Array(pair.into_inner().map(parse_value).collect()),
+            Rule::Comparator => Syntax::Comparator(pair.as_str()),
+            // Rule::Operator => Syntax::Operator(pair.as_str()),
+            // Rule::Object => Syntax::Object(pair.as_str()),
+            Rule::Rule => Syntax::Rule(pair.into_inner().map(parse_rule_value).collect()),
+            Rule::string => Syntax::String(pair.into_inner().next().unwrap().as_str()),
+            Rule::boolean => Syntax::Boolean(pair.as_str().to_lowercase().parse().unwrap()),
+            Rule::null => Syntax::Null,
+            Rule::MembershipRules
+            | Rule::EOI
+            // | Rule::Rule
+            | Rule::Brackets
+            | Rule::Value
+            | Rule::inner
+            | Rule::char
+            | Rule::WHITESPACE
+            => { println!("ERROR - attempted to handle unconfigure rule: {:#?}", pair); unreachable!() },
+        }
+    }
+    Ok(parse_value(rules))
+}
+
+fn parse_rule_value(pair: Pair<Rule>) -> Syntax {
+    match pair.as_rule() {
+        Rule::string => Syntax::String(pair.into_inner().next().unwrap().as_str()),
+        Rule::array => Syntax::Array(pair.into_inner().map(parse_rule_value).collect()),
+        Rule::boolean => Syntax::Boolean(pair.as_str().to_lowercase().parse().unwrap()),
+        Rule::null => Syntax::Null,
+        _ => panic!("Misconfigured rule"),
+    }
+}
+
+pub fn serialize_syntax(val: &Syntax) -> String {
+    use Syntax::*;
+
+    match val {
+        Rule(_) => String::new(),
+        Brackets(b) => {
+            let contents: Vec<_> = a.iter().map(serialize_syntax).collect();
+            format!("({})", contents.join(" "))
+        },
+        Array(a) => {
+            let contents: Vec<_> = a.iter().map(serialize_syntax).collect();
+            format!("[{}]", contents.join(","))
+        },
+        Comparator(c) => format!("{}", c),
+        // Operator(op) => format!("{}", op),
+        // Object(ob) => format!("{}", ob),
+        String(s) => format!("\"{}\"", s),
+        Boolean(b) => format!("{}", b),
+        Null => format!("null"),
+    }
+}

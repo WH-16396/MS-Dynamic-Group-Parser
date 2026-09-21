@@ -1,0 +1,70 @@
+Property (user.Property):
+accountEnabled
+objectId
+displayName
+dirSyncEnabled
+city
+companyName
+country
+department
+facsimileTelephoneNumber
+givenName
+employeeId
+jobTitle
+mail
+mailNickname
+mobile
+passwordPolicies
+physicalDeliveryOfficeName
+postalCode
+preferredLanguage
+sipProxyAddress
+state
+streetAddress
+surname
+telephoneNumber
+usageLocation
+userPrincipalName
+userType
+onPremisesDistinguishedName
+onPremisesSecurityIdentifier
+otherMails
+proxyAddresses
+assignedPlans
+employeeHireDate
+extensionAttribute1
+extensionAttribute2
+extensionAttribute3
+extensionAttribute4
+extensionAttribute5
+extensionAttribute6
+extensionAttribute7
+extensionAttribute8
+extensionAttribute9
+extensionAttribute10
+extensionAttribute11
+extensionAttribute12
+extensionAttribute13
+extensionAttribute14
+extensionAttribute15
+
+
+-op		Operator
+-plus		Add
+-all		All
+-and		And
+-any		Any
+-endsWith	Ends With
+-eq		Equals
+-ge		Greater Than or Equal
+-in		In
+-le		Less Than or Equal
+-notEndsWith	Not Ends With
+-notIn		Not In
+-ne		Not Equals
+-not		Not
+-notStartsWith	Not Starts With
+-or 		Or
+-startsWith	Starts With
+-minus		Subtract
+
