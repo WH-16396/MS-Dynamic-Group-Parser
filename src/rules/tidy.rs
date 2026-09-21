@@ -1,4 +1,4 @@
-use crate::syntax::{
+use crate::rules::{
     // SyntaxBlock,
     // Node,
     // Value,
@@ -19,7 +19,6 @@ pub fn remove_duplicates<'a>(mut dnf: Dnf<'a>) -> Dnf<'a> {
         })
     }
     dnf
-    // ;dnf
 }
 
 pub fn order_rules<'a>(mut dnf: Dnf<'a>) -> Dnf<'a> {

@@ -1,10 +1,9 @@
 use axum::{routing::post, Router};
 use std::net::SocketAddr;
 
-// Syntax crate for parsing and cleaning the membership rules
 pub mod syntax;
+pub mod rules;
 
-// Routes crate for the API
 mod routes;
 
 #[tokio::main]
@@ -32,7 +31,7 @@ async fn webserver() {
 }
 
 fn router() -> Router {
-    use crate::routes::syntax_api;
+    use crate::routes::api_v1::syntax_api;
 
     Router::new().route("/api/v1", post(syntax_api))
 }

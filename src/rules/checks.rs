@@ -1,4 +1,4 @@
-use crate::syntax::{
+use crate::rules::{
     Rule,
     Condition,
     Operator,

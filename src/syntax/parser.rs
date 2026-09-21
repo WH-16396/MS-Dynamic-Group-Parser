@@ -1,6 +1,6 @@
 use pest::{Parser, error::Error, iterators::Pair};
 use pest_derive::Parser;
-use crate::syntax::{
+use crate::rules::{
     Node,
     Condition,
     Operator,
