@@ -132,7 +132,7 @@ impl<'a> Group<'a> {
     // True when this sibling is a leaf already collecting the same property
     fn absorbs(&self, leaf: &Leaf<'a>) -> bool {
         matches!(self, Group::Leaf(target)
-            if target.property == leaf.property && target.is_string_set())
+            if target.property.eq_ignore_ascii_case(leaf.property)  && target.is_string_set())
     }
 
     fn absorb(&mut self, leaf: Leaf<'a>) {
