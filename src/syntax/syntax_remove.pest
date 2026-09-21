@@ -2,23 +2,18 @@ MembershipRules     = _{ SOI ~ Segment ~ EOI }
 
 
 
-Segment     = { ( ( Brackets | Node | RemovalNode ) ~ Comparator )* ~ ( Brackets | Node | RemovalNode ) }
+Segment     = { ( ( Node | Brackets ) ~ Comparator )* ~ ( Node | Brackets ) }
 
 
 
 Brackets    = _{ "(" ~ Segment ~ ")" }
 
 // Nodes and Rule Conditions
-Node = { Property ~ ( Operator | NotOperator ) ~ ( Value | Array ) }
-// Node            = _{ SingleNode | ArrayNode | RemovalNode}
-// SingleNode       = { Property ~ SingleOp ~ Value }
-// ArrayNode    = { Property ~ ArrayOp ~ Array }
-RemovalNode  = {
+Node  = {
     ( Blank | Property ) ~ 
     ( Blank | Operator | NotOperator ) ~ 
     ( Blank | Value | Array )
 }
-
 
 Property        = @{ Object ~ "." ~ Variable }
     Object              = { ^"user" | ^"device" }
