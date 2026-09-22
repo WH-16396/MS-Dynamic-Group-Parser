@@ -200,12 +200,14 @@ impl<'a> Rule<'a> {
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, Serialize)]
 pub enum Warning {
     NotEnabled,
+    NotMember,
     MissingDept,
 }
 impl Warning {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::NotEnabled => "notEnabled",
+            Self::NotMember => "notMember",
             Self::MissingDept => "missingDept",
         }
     }
@@ -213,6 +215,9 @@ impl Warning {
         match self {
             Self::NotEnabled => String::from("'user.accountEnabled -eq True' is \
              not universally applied to all rules, disabled accounts can still \
+             match these rules."),
+            Self::NotMember => String::from("'user.userType -eq \"Member\"' is \
+             not universally applied to all rules, external accounts can still \
              match these rules."),
             Self::MissingDept => String::from("'user.jobTitle' rule is missing a \
              'user.department' condition, unintended users might match these rules."),

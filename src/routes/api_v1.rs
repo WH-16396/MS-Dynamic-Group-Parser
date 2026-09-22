@@ -112,7 +112,9 @@ pub async fn syntax_api(Json(req): Json<ApiRequest>) -> Response {
 
 
             // Defines the conditions for returning JSON as a default when no other conditions are selected
-            let return_json = req.return_json != Some(false) && req.return_syntax != Some(true) && req.return_rules != Some(true);
+            let return_json = 
+                req.return_json != Some(true) && req.return_syntax != Some(true) && req.return_rules != Some(true) ||
+                req.return_json == Some(true);
 
             if return_json || req.return_syntax == Some(true) {
                 let tree = reconstruct(&dnf);

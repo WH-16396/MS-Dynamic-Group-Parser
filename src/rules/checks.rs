@@ -80,7 +80,7 @@ pub fn check_rules<'a>(dnf: Dnf<'a>) -> Dnf<'a> {
                 operator: None,
                 value: None
             },
-            &Warning::NotEnabled
+            &Warning::NotMember
         ));
 
         // -------------------------------------------------
