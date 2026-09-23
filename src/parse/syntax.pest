@@ -10,10 +10,16 @@ Brackets    = _{ "(" ~ Segment ~ ")" }
 
 // Nodes and Rule Conditions
 // Node = { Property ~ Operator ~ ( Value | Array ) }
-Node = { Property ~ ( Operator | NotOperator ) ~ ( Value | Array ) }
+// Node = { Property ~ ( Operator | NotOperator ) ~ ( Value | Array ) }
 // Node            = _{ SingleNode | ArrayNode }
 // SingleNode       = { Property ~ SingleOp ~ Value }
 // ArrayNode    = { Property ~ ArrayOp ~ Array }
+
+Node  = {
+    ( Blank | Property ) ~ 
+    ( Blank | Operator | NotOperator ) ~ 
+    ( Blank | Value | Array )
+}
 
 Property        = @{ Object ~ "." ~ Variable }
     Object              = { ^"user" | ^"device" }

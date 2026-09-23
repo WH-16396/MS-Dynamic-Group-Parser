@@ -2,13 +2,15 @@ use pest::{Parser, error::Error, iterators::Pair};
 use pest_derive::Parser;
 use crate::rules::{
     Node,
-    Condition,
-    Operator,
-    Value,
     Dnf,
     // Imported as 'Nodes' to prevent conflicts with the 'Rules' enum since
     // that gets automatically imported as part of '#[derive(Parser)]'
     Rule as Nodes,
+};
+use crate::condition::{
+    Condition, 
+    operator::Operator, 
+    value::Value
 };
 
 impl Rule {
@@ -38,7 +40,7 @@ impl Rule {
 }
 
 #[derive(Parser)]
-#[grammar = "syntax/syntax_remove.pest"]
+#[grammar = "parse/syntax_remove.pest"]
 struct SyntaxParser;
 
 pub fn parse_rulebuilder<'a>(raw: &'a str) -> Result<Dnf<'a>, Error<Rule>> {

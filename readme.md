@@ -48,8 +48,8 @@ Example rule:
 
 When going through the API this would become two distinct rules: 
 
-1. user.accountEnabled -eq True and user.userType -eq "Member" and user.jobTitle -eq "job 1"
-2. user.accountEnabled -eq True and user.userType -eq "Member" and user.jobTitle -eq "job 2"
+1. ```user.accountEnabled -eq True and user.userType -eq "Member" and user.jobTitle -eq "job 1"```
+2. ```user.accountEnabled -eq True and user.userType -eq "Member" and user.jobTitle -eq "job 2"```
 
 If it's chosen to output back into compiled syntax or a JSON tree structure this would then be merged back into a tree structure, combining any shared parents as well as into arrays where possible. This makes the rules agnostic to the structure of the input and works around some issues that may have been introduced as the rules have been modified over time.
 

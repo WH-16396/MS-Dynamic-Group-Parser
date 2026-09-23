@@ -4,13 +4,15 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use crate::syntax::{
-    parser::parse_rulebuilder,
-};
-use crate::rules::{
-    checks::check_rules, 
-    tidy::*,
-    reconstruct::reconstruct,
+use crate::{
+    parse::{
+        parser::parse_rulebuilder,
+    },
+    rules::{
+        checks::check_rules, 
+        tidy::*,
+        reconstruct::reconstruct,
+    }
 };
 
 #[derive(Deserialize)]

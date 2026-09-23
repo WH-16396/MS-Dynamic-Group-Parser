@@ -1,23 +1,24 @@
-use crate::rules::{
-    Rule,
-    Condition,
-    Operator,
-    Value,
-    Warning,
-    Dnf,
+use crate::{
+    rules::{
+        Rule,
+        Warning,
+        Dnf,
+    },
+    condition::{
+        Condition,
+        ConditionPart, 
+        operator::Operator, 
+        value::Value
+    }
 };
 
-#[derive(Debug, Clone)]
-struct NodeCheck<'a> {
-    property: Option<&'a str>,
-    operator: Option<Operator>,
-    value: Option<Value<'a>>,
-}
 
 impl<'a> Condition<'a> {
-    fn contains(&self, check_node: &NodeCheck) -> bool {
-        if 
-            (Some(self.property) == check_node.property || !check_node.property.is_some()) &&
+    fn contains(&self, check_node: &ConditionPart) -> bool {
+        if match check_node.property {
+                Some(s) => s.eq_ignore_ascii_case(self.property),
+                None => true,
+            } &&
             (Some(self.operator) == check_node.operator || !check_node.operator.is_some()) &&
             (Some(self.value) == check_node.value || !check_node.value.is_some()) 
         {
@@ -27,7 +28,7 @@ impl<'a> Condition<'a> {
     }
 }
 impl<'a> Rule<'a> {
-    fn contains(&self, check_node: &NodeCheck) -> bool {
+    fn contains(&self, check_node: &ConditionPart) -> bool {
         for node in self.nodes.iter() {
             if node.condition.contains(check_node) {
                 return true
@@ -41,7 +42,7 @@ pub fn check_rules<'a>(dnf: Dnf<'a>) -> Dnf<'a> {
     let mut out: Dnf<'a> = Vec::new();
     for r in dnf.into_iter() {
         let mut rule: Rule<'a> = r.clone();
-        let mut warnings: Vec<(Vec<&NodeCheck<'_>>, &NodeCheck<'_>, &Warning)> = Vec::new(); 
+        let mut warnings: Vec<(Vec<&ConditionPart<'_>>, &ConditionPart<'_>, &Warning)> = Vec::new(); 
 
         // CHECKS
         
@@ -50,13 +51,13 @@ pub fn check_rules<'a>(dnf: Dnf<'a>) -> Dnf<'a> {
         // --------------------------
         warnings.push((
             vec![
-                &NodeCheck {
+                &ConditionPart {
                     property: Some("user.accountEnabled"),
                     operator: Some(Operator::Equals),
                     value: Some(Value::Boolean(true))
                 }, 
             ],
-            &NodeCheck {
+            &ConditionPart {
                 property: None,
                 operator: None,
                 value: None
@@ -69,13 +70,13 @@ pub fn check_rules<'a>(dnf: Dnf<'a>) -> Dnf<'a> {
         // -------------------------
         warnings.push((
             vec![
-                &NodeCheck {
+                &ConditionPart {
                     property: Some("user.userType"),
                     operator: Some(Operator::Equals),
                     value: Some(Value::String("Member"))
                 }, 
             ],
-            &NodeCheck {
+            &ConditionPart {
                 property: None,
                 operator: None,
                 value: None
@@ -88,13 +89,13 @@ pub fn check_rules<'a>(dnf: Dnf<'a>) -> Dnf<'a> {
         // -------------------------------------------------
         warnings.push((
             vec![
-                &NodeCheck {
+                &ConditionPart {
                     property: Some("user.department"),
                     operator: Some(Operator::Equals),
                     value: None
                 }, 
             ],
-            &NodeCheck {
+            &ConditionPart {
                     property: Some("user.jobTitle"),
                     operator: Some(Operator::Equals),
                     value: None
@@ -119,8 +120,8 @@ pub fn check_rules<'a>(dnf: Dnf<'a>) -> Dnf<'a> {
 
 fn match_rule<'a>(
     rule: &Rule<'a>, 
-    criteria: Vec<&NodeCheck>, 
-    node_criteria: &NodeCheck, 
+    criteria: Vec<&ConditionPart>, 
+    node_criteria: &ConditionPart, 
     warning: &'a Warning
 ) -> Rule<'a> {
     let mut out: Rule<'a> = rule.clone();

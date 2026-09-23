@@ -1,8 +1,9 @@
 use axum::{routing::post, Router};
 use std::net::SocketAddr;
 
-pub mod syntax;
+pub mod parse;
 pub mod rules;
+pub mod condition;
 
 mod routes;
 
@@ -21,7 +22,7 @@ async fn webserver() {
     let port: u16 = std::env::var("FUNCTIONS_CUSTOMHANDLER_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(8080);
+        .unwrap_or(8082);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     println!("Router initialised, listening on port {}", port);
@@ -31,7 +32,9 @@ async fn webserver() {
 }
 
 fn router() -> Router {
-    use crate::routes::api_v1::syntax_api;
+    use crate::routes;
 
-    Router::new().route("/api/v1", post(syntax_api))
+    Router::new()
+        .route("/api/v1", post(routes::api_v1::syntax_api))
+        .route("/api/v2", post(routes::api_v2::api_handler))
 }
