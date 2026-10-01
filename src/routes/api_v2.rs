@@ -79,14 +79,6 @@ pub struct ApiResponse {
 //     ]
 // }
 
-#[derive(Debug)]
-enum InputType<'j> {
-    SyntaxAdd(String),
-    SyntaxRemove(String),
-    RuleAdd(Vec<Condition<'j>>),
-    RuleRemoveOnly(Vec<ConditionPart<'j>>),
-    RuleRemoveAll(Vec<ConditionPart<'j>>),
-}
 
 // pub struct InputErr {
 //     message: &'static str,
@@ -100,6 +92,7 @@ enum InputErr<'j> {
     DataExist(&'j Value),
     SyntaxParse(&'j Value),
     ConditionParse(&'j Value),
+    ConditionParseAdd(&'j Value),
     PropertyParse(&'j Value),
     OperatorParse(&'j Value),
     ItemParse(&'j Value),
@@ -115,6 +108,7 @@ impl<'j> InputErr<'j> {
             Self::DataExist(j) |
             Self::SyntaxParse(j) |
             Self::ConditionParse(j) |
+            Self::ConditionParseAdd(j) |
             Self::PropertyParse(j) |
             Self::OperatorParse(j) |
             Self::ItemParse(j) |
@@ -147,11 +141,45 @@ impl<'j> InputErr<'j> {
                                 //     message: "REPLACE ERROR",
                                 //     json: obj.clone(),
                                 // })
+                                
+#[derive(Debug)]
+enum InputType<'j> {
+    SyntaxAdd(String),
+    SyntaxRemove(String),
+    RuleAdd(Vec<Condition<'j>>),
+    RuleRemoveOnly(Vec<ConditionPart<'j>>),
+    RuleRemoveAll(Vec<ConditionPart<'j>>),
+}
 
 impl<'j> InputType<'j> {
     fn from_value(val: &'j Value) -> Result<Self, InputErr<'j>> {
-        match val {
+        let t = match val {
             Value::Object(obj) => {
+
+                // Conditions are used for 'ruleAdd' type since it needs defined data
+                fn syntax<'j>(obj: &'j Value) -> Result<String, InputErr<'j>> {
+                    match obj {
+                        Value::String(s) => Ok(s.clone()),
+                        _ => Err(InputErr::SyntaxParse(obj)),
+                    }
+                }
+
+                // Condition parts are used for 'ruleRemove' types since they need optional data
+                fn condition_part<'j>(obj: &'j Value) -> Result<Vec<ConditionPart<'j>>, InputErr<'j>> {
+                    Ok(match obj {
+                        Value::Object(_) => Ok(vec![
+                            ConditionPart::from_value(obj).ok_or(InputErr::ConditionParse(obj))?
+                        ]),
+                        Value::Array(a) => a.into_iter()
+                            .map(
+                                |x| 
+                                ConditionPart::from_value(x)
+                                .ok_or(InputErr::ConditionParse(obj))
+                            ).collect(),
+                        _ => Err(InputErr::ConditionParse(obj)),
+                    }?
+                    )
+                }
 
                 // Conditions are used for 'ruleAdd' type since it needs defined data
                 fn condition<'j>(obj: &'j Value) -> Result<Vec<Condition<'j>>, InputErr<'j>> {
@@ -170,47 +198,31 @@ impl<'j> InputType<'j> {
                     )
                 }
 
-                // // Condition parts are used for 'ruleRemove' types since they need optional data
-                // fn condition_part<'a>(data: &'a Value) -> Result<ReqInputType<'a>, InputErr> {
-                //     Ok(ReqInputType::RuleAdd(match data {
-                //         Value::Object(_) => Ok(vec![
-                //             Condition::from_value(&data).ok_or(InputErr)?
-                //         ]),
-                //         Value::Array(a) => a.into_iter()
-                //             .map(
-                //                 |x| 
-                //                 Condition::from_value(&x)
-                //                     .ok_or(InputErr)
-                //             ).collect(),
-                //         _ => Err(InputErr),
-                //     }?
-                //     ))
-                // }
+                let data = obj.get_key_value("data")
+                    .ok_or(InputErr::DataExist(val))?
+                    .1;
                 
                 match obj.get_key_value("type")
                     .ok_or(InputErr::TypeExist(&val))?.1 
                 {
                     Value::String(s) => 
                         match s.as_str() {
-                            // "syntaxAdd" => rule_add(obj.get_key_value("data").ok_or(InputErr)?.1),
-                            "ruleAdd" => Ok(InputType::RuleAdd(condition(obj.get_key_value("data")
-                                .ok_or(InputErr::DataExist(val))?
-                                .1
-                            )?)),
-                            // "ruleAdd" => rule_add(obj.get_key_value("data").ok_or(InputErr)?.1),
-                            _ => Err(InputErr::TypeParse(val)),
+                            "syntaxAdd" =>      Ok(InputType::SyntaxAdd(syntax(data)?)),
+                            "syntaxRemove" =>   Ok(InputType::SyntaxRemove(syntax(data)?)),
+                            "ruleAdd" =>        Ok(InputType::RuleAdd(condition(data)?)),
+                            "ruleRemoveOnly" => Ok(InputType::RuleRemoveOnly(condition_part(data)?)),
+                            "ruleRemoveAll" =>  Ok(InputType::RuleRemoveAll(condition_part(data)?)),
+                            _ =>                Err(InputErr::TypeParse(val)),
                         },
                     _ => Err(InputErr::TypeParse(val)),
                 }
             },
             Value::String(s) => Ok(Self::SyntaxAdd(s.to_string())),
             _ => Err(InputErr::InputParse(val)),
-        }
-    }
-    // fn match_type(obj: &'a Map<String, Value>) -> Result<Self, InputErr> {
+        };
 
-        
-    // }
+        println!("{:#?}", t); t
+    }
 }
 
 
@@ -232,31 +244,65 @@ impl<'j> InputType<'j> {
 //         }
 //     }
 // }
-impl<'j> Condition<'j> {
-    pub fn from_value(val: &'j Value) -> Option<Self> {
+
+impl<'j> ConditionPart<'j> {
+    fn from_value(val: &'j Value) -> Option<Self> {
         match val {
             Value::Object(obj) => Some(Self {
                 property: match obj.get_key_value("property")?.1 {
-                    Value::String(property) => validate_property(property)?,
+                    Value::String(property) => validate_property(property),
                     _ => return None,
                 },
                 operator: match obj.get_key_value("operator")?.1 {
-                    Value::String(operator) => Operator::from_str(operator)?,
+                    Value::String(operator) => Operator::from_str(operator),
                     _ => return None,
                 },
-                // operator: Operator::from_str(&String::from("-eq"))?,
-                value: Item::Null,
+                value: Item::from_value(obj.get_key_value("value")?.1),
             }),
             _ => None,
         }
     }
 }
+impl<'j> Condition<'j> {
+    fn from_value(val: &'j Value) -> Option<Self> {
+        match ConditionPart::from_value(val) {
+            Some(part) => {
+                Some(Self {
+                    property: part.property?,
+                    operator: part.operator?,
+                    value: part.value?,
+                })
+            },
+            None => None,
+        }
+    }
+}
 impl Operator {
     fn from_str(str: &str) -> Option<Self> {
-        match if &str[..1] == "-" {&str[1..]} else {&str} {
-            a => println!("'{a}'"),
-        }
-        ;Some(Self::Add)
+        let arg = if &str[..1] == "-" {&str[1..]} else {&str};
+
+        let matched =
+        if arg.eq_ignore_ascii_case("plus")             { Self::Add }                   else 
+        if arg.eq_ignore_ascii_case("all")              { Self::All }                   else 
+        if arg.eq_ignore_ascii_case("any")              { Self::Any }                   else 
+        if arg.eq_ignore_ascii_case("contains")         { Self::Contains }              else 
+        if arg.eq_ignore_ascii_case("endsWith")         { Self::EndsWith }              else 
+        if arg.eq_ignore_ascii_case("eq")               { Self::Equals }                else 
+        if arg.eq_ignore_ascii_case("ge")               { Self::GreaterThanOrEqual }    else 
+        if arg.eq_ignore_ascii_case("in")               { Self::In }                    else 
+        if arg.eq_ignore_ascii_case("le")               { Self::LessThanOrEqual }       else 
+        if arg.eq_ignore_ascii_case("match")            { Self::Match }                 else 
+        if arg.eq_ignore_ascii_case("notContains")      { Self::NotContains }           else 
+        if arg.eq_ignore_ascii_case("notEndsWith")      { Self::NotEndsWith }           else 
+        if arg.eq_ignore_ascii_case("ne")               { Self::NotEquals }             else 
+        if arg.eq_ignore_ascii_case("notIn")            { Self::NotIn }                 else 
+        if arg.eq_ignore_ascii_case("notMatch")         { Self::NotMatch }              else 
+        if arg.eq_ignore_ascii_case("notStartsWith")    { Self::NotStartsWith }         else 
+        if arg.eq_ignore_ascii_case("startsWith")       { Self::StartsWith }            else 
+        if arg.eq_ignore_ascii_case("minus")            { Self::Subtract }              else 
+        { return None };
+        
+        Some(matched)
     }
 }
 impl<'j> Item<'j> {
@@ -270,14 +316,6 @@ impl<'j> Item<'j> {
         }
     }
 }
-
-// struct 
-
-// Syntax Add               String
-// Vec Syntax Add/Remove    Vec<String>
-// Vec RuleAdd              Vec<Condition>
-// Vec RuleRemovePrecise    Vec<ConditionPart>
-// Vec RuleRemoveAll        Vec<ConditionPart>
 
 pub async fn api_handler(Json(req): Json<ApiRequest>) -> Response {
 
