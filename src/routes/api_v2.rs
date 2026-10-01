@@ -6,8 +6,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value::{self, Object}, json};
 use crate::{
     condition::{
-        Condition, ConditionPart, operator::Operator, property::{self, validate_property}, value::Value as Item,
-    }, parse::parser::parse_rulebuilder, rules::{
+        Condition, 
+        ConditionPart, 
+        operator::Operator, 
+        property::{
+            self, 
+            validate_property
+        }, 
+        value::Value as Item,
+    }, 
+    parse::parser::parse_rulebuilder, 
+    rules::{
         checks::check_rules, 
         reconstruct::reconstruct, 
         tidy::*,
@@ -58,7 +67,7 @@ pub struct ApiResponse {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
     #[serde(skip_serializing_if = "Value::is_null")]
-    errors: Value,
+    error: Value,
 }
 
 // Syntax input
@@ -84,63 +93,7 @@ pub struct ApiResponse {
 //     message: &'static str,
 //     json: Value,
 // }
-#[derive(Debug)]
-enum InputErr<'j> {
-    TypeParse(&'j Value),
-    TypeExist(&'j Value),
-    DataParse(&'j Value),
-    DataExist(&'j Value),
-    SyntaxParse(&'j Value),
-    ConditionParse(&'j Value),
-    ConditionParseAdd(&'j Value),
-    PropertyParse(&'j Value),
-    OperatorParse(&'j Value),
-    ItemParse(&'j Value),
-    InputParse(&'j Value),
-    InputExist(&'j Value),
-}
-impl<'j> InputErr<'j> {
-    fn into_value(self) -> Value {
-        match self {
-            Self::TypeParse(j) |
-            Self::TypeExist(j) |
-            Self::DataParse(j) |
-            Self::DataExist(j) |
-            Self::SyntaxParse(j) |
-            Self::ConditionParse(j) |
-            Self::ConditionParseAdd(j) |
-            Self::PropertyParse(j) |
-            Self::OperatorParse(j) |
-            Self::ItemParse(j) |
-            Self::InputParse(j) |
-            Self::InputExist(j) => j.clone()
-        }
-    }
-}
-// enum InputErr {
-//     TypeParse(Value),
-//     TypeExist(Value),
-//     DataParse(Value),
-//     DataExist(Value),
-//     SyntaxParse(Value),
-//     ConditionParse(Value),
-//     PropertyParse(Value),
-//     OperatorParse(Value),
-//     ItemParse(Value),
-//     InputParse(Value),
-// }
 
-
-// Err(InputErr {
-//     message: "REPLACE ERROR",
-//     json: &val,
-// })
-
-
-                                // .ok_or(InputErr {
-                                //     message: "REPLACE ERROR",
-                                //     json: obj.clone(),
-                                // })
                                 
 #[derive(Debug)]
 enum InputType<'j> {
@@ -152,11 +105,10 @@ enum InputType<'j> {
 }
 
 impl<'j> InputType<'j> {
-    fn from_value(val: &'j Value) -> Result<Self, InputErr<'j>> {
+    fn process_input(val: &'j Value) -> Result<Self, InputErr<'j>> {
         let t = match val {
             Value::Object(obj) => {
 
-                // Conditions are used for 'ruleAdd' type since it needs defined data
                 fn syntax<'j>(obj: &'j Value) -> Result<String, InputErr<'j>> {
                     match obj {
                         Value::String(s) => Ok(s.clone()),
@@ -164,60 +116,39 @@ impl<'j> InputType<'j> {
                     }
                 }
 
-                // Condition parts are used for 'ruleRemove' types since they need optional data
-                fn condition_part<'j>(obj: &'j Value) -> Result<Vec<ConditionPart<'j>>, InputErr<'j>> {
-                    Ok(match obj {
+
+                fn condition<'j, T: FromValue<'j>>(val: &'j Value) -> Result<Vec<T>, InputErr<'j>> {
+                    Ok(match val {
                         Value::Object(_) => Ok(vec![
-                            ConditionPart::from_value(obj).ok_or(InputErr::ConditionParse(obj))?
+                            T::from_value(val)?
                         ]),
                         Value::Array(a) => a.into_iter()
-                            .map(
-                                |x| 
-                                ConditionPart::from_value(x)
-                                .ok_or(InputErr::ConditionParse(obj))
-                            ).collect(),
-                        _ => Err(InputErr::ConditionParse(obj)),
-                    }?
-                    )
+                            .map(|x| T::from_value(x))
+                            .collect(),
+                        _ => Err(InputErr::DataParse(val)),
+                    }?)
                 }
 
-                // Conditions are used for 'ruleAdd' type since it needs defined data
-                fn condition<'j>(obj: &'j Value) -> Result<Vec<Condition<'j>>, InputErr<'j>> {
-                    Ok(match obj {
-                        Value::Object(_) => Ok(vec![
-                            Condition::from_value(obj).ok_or(InputErr::ConditionParse(obj))?
-                        ]),
-                        Value::Array(a) => a.into_iter()
-                            .map(
-                                |x| 
-                                Condition::from_value(x)
-                                .ok_or(InputErr::ConditionParse(obj))
-                            ).collect(),
-                        _ => Err(InputErr::ConditionParse(obj)),
-                    }?
-                    )
-                }
-
-                let data = obj.get_key_value("data")
-                    .ok_or(InputErr::DataExist(val))?
-                    .1;
                 
-                match obj.get_key_value("type")
-                    .ok_or(InputErr::TypeExist(&val))?.1 
-                {
-                    Value::String(s) => 
-                        match s.as_str() {
-                            "syntaxAdd" =>      Ok(InputType::SyntaxAdd(syntax(data)?)),
-                            "syntaxRemove" =>   Ok(InputType::SyntaxRemove(syntax(data)?)),
-                            "ruleAdd" =>        Ok(InputType::RuleAdd(condition(data)?)),
-                            "ruleRemoveOnly" => Ok(InputType::RuleRemoveOnly(condition_part(data)?)),
-                            "ruleRemoveAll" =>  Ok(InputType::RuleRemoveAll(condition_part(data)?)),
-                            _ =>                Err(InputErr::TypeParse(val)),
-                        },
-                    _ => Err(InputErr::TypeParse(val)),
-                }
+                if let Some(data) = obj.get_key_value("data") {
+
+                    match obj.get_key_value("type")
+                        .ok_or(InputErr::TypeExist(&val))?.1 
+                    {
+                        Value::String(s) => 
+                            match s.as_str() {
+                                "syntaxAdd" =>      Ok(InputType::SyntaxAdd(syntax(data.1)?)),
+                                "syntaxRemove" =>   Ok(InputType::SyntaxRemove(syntax(data.1)?)),
+                                "ruleAdd" =>        Ok(InputType::RuleAdd(condition(data.1)?)),
+                                "ruleRemoveOnly" => Ok(InputType::RuleRemoveOnly(condition(data.1)?)),
+                                "ruleRemoveAll" =>  Ok(InputType::RuleRemoveAll(condition(data.1)?)),
+                                _ =>                Err(InputErr::TypeParse(val)),
+                            },
+                        _ => Err(InputErr::TypeParse(val)),
+                    }
+                } else { Err(InputErr::DataExist(val)) }
             },
-            Value::String(s) => Ok(Self::SyntaxAdd(s.to_string())),
+            Value::String(s) => Ok(Self::SyntaxAdd(s.clone())),
             _ => Err(InputErr::InputParse(val)),
         };
 
@@ -225,58 +156,50 @@ impl<'j> InputType<'j> {
     }
 }
 
+trait FromValue<'j> {
+    fn from_value(val: &'j Value) -> Result<Self, InputErr<'j>> where Self: Sized;
+}
 
-// impl<'a> ConditionPart<'a> {
-//     pub fn from_value(val: &'a Value) -> Option<Self> {
-//         match val {
-//             Value::Object(obj) => Some(Self {
-//                 property: match obj.get_key_value("property")?.1 {
-//                     Value::String(property) => if property == "*" { None } else { Some(validate_property(property)?) },
-//                     _ => return None,
-//                 },
-//                 operator: match obj.get_key_value("property")?.1 {
-//                     Value::String(operator) => if operator == "*" { None } else { Some(Operator::from_str(operator)?) },
-//                     _ => return None,
-//                 }, //Operator::from_str(&String::from("-eq"))?,
-//                 value: Item::Null,
-//             }),
-//             _ => None,
-//         }
-//     }
-// }
-
-impl<'j> ConditionPart<'j> {
-    fn from_value(val: &'j Value) -> Option<Self> {
+impl<'j> FromValue<'j> for ConditionPart<'j> {
+    fn from_value(val: &'j Value) -> Result<Self, InputErr<'j>> {
         match val {
-            Value::Object(obj) => Some(Self {
-                property: match obj.get_key_value("property")?.1 {
-                    Value::String(property) => validate_property(property),
-                    _ => return None,
+            Value::Object(obj) => Ok(Self {
+                property: match obj.get_key_value("property").ok_or(InputErr::PropertyParse(val))?.1 {
+                    Value::String(property) => if property == "*" { None } else { 
+                        Some(validate_property(property).ok_or(InputErr::PropertyParse(val))?) 
+                    },
+                    _ => return Err(InputErr::PropertyParse(val)),
                 },
-                operator: match obj.get_key_value("operator")?.1 {
-                    Value::String(operator) => Operator::from_str(operator),
-                    _ => return None,
+                operator: match obj.get_key_value("operator").ok_or(InputErr::OperatorParse(val))?.1 {
+                    Value::String(operator) => if operator == "*" { None } else { Operator::from_str(operator) },
+                    _ => return Err(InputErr::OperatorParse(val)),
                 },
-                value: Item::from_value(obj.get_key_value("value")?.1),
+                value: match obj.get_key_value("value").ok_or(InputErr::ItemParse(val))?.1 {
+                    Value::String(s) => if s == "*" { None } else { Some(Item::String(s)) },
+                    Value::Number(n) => Some(Item::Number(n.as_i64().ok_or(InputErr::ItemParse(val))?)),
+                    Value::Bool(b) => Some(Item::Boolean(*b)),
+                    Value::Null => Some(Item::Null),
+                    _ => return Err(InputErr::ItemParse(val)),
+                } 
             }),
-            _ => None,
+            _ => Err(InputErr::ConditionParse(val)),
         }
     }
 }
-impl<'j> Condition<'j> {
-    fn from_value(val: &'j Value) -> Option<Self> {
+
+impl<'j> FromValue<'j> for Condition<'j> {
+    fn from_value(val: &'j Value) -> Result<Self, InputErr<'j>>  {
         match ConditionPart::from_value(val) {
-            Some(part) => {
-                Some(Self {
-                    property: part.property?,
-                    operator: part.operator?,
-                    value: part.value?,
-                })
-            },
-            None => None,
+            Ok(part) => Ok(Self {
+                property: part.property.ok_or(InputErr::ConditionBlank(val))?,
+                operator: part.operator.ok_or(InputErr::ConditionBlank(val))?,
+                value: part.value.ok_or(InputErr::ConditionBlank(val))?,
+            }),
+            Err(e) => Err(e),
         }
     }
 }
+
 impl Operator {
     fn from_str(str: &str) -> Option<Self> {
         let arg = if &str[..1] == "-" {&str[1..]} else {&str};
@@ -305,17 +228,83 @@ impl Operator {
         Some(matched)
     }
 }
-impl<'j> Item<'j> {
-    pub fn from_value(val: &'j Value) -> Option<Self> {
-        match val {
-            Value::String(s) => Some(Self::String(s)),
-            Value::Number(n) => Some(Self::Number(n.as_i64()?)),
-            Value::Bool(b) => Some(Self::Boolean(*b)),
-            Value::Null => Some(Self::Null),
-            _ => None,
+
+
+
+#[derive(Debug)]
+enum InputErr<'j> {
+    TypeParse(&'j Value),
+    TypeExist(&'j Value),
+    DataParse(&'j Value),
+    DataExist(&'j Value),
+    SyntaxParse(&'j Value),
+    ConditionParse(&'j Value),
+    ConditionBlank(&'j Value),
+    PropertyParse(&'j Value),
+    OperatorParse(&'j Value),
+    ItemParse(&'j Value),
+    InputParse(&'j Value),
+    InputExist(&'j Value),
+}
+impl<'j> InputErr<'j> {
+    fn as_message(&self) -> &str {
+        match self {
+            Self::TypeParse(_) => "Invalid value for the key 'type'.",
+            Self::TypeExist(_) => "Could not find the key 'type' within the input object.",
+            Self::DataParse(_) => "Invalid value for the key 'data', please ensure rule inputs are an object or object array.",
+            Self::DataExist(_) => "Could not find the key 'data' within the input object.",
+            Self::SyntaxParse(_) => "Failed to parse 'data', please ensure direct syntax inputs are a string.",
+            Self::ConditionParse(_) => "Failed to parse rule condition.",
+            Self::ConditionBlank(_) => "Failed to parse rule condition, please ensure that there are no wildcard values (*) for 'ruleAdd' types.",
+            Self::PropertyParse(_) => "Failed to parse property.",
+            Self::OperatorParse(_) => "Failed to parse operator.",
+            Self::ItemParse(_) => "Failed to parse input value.",
+            Self::InputParse(_) => "Invalid value for the key 'input'.",
+            Self::InputExist(_) => "Could not find the key 'input' within the request.",
+        }
+    }
+    fn into_value(self) -> Value {
+        match self {
+            Self::TypeParse(j) |
+            Self::TypeExist(j) |
+            Self::DataParse(j) |
+            Self::DataExist(j) |
+            Self::SyntaxParse(j) |
+            Self::ConditionParse(j) |
+            Self::ConditionBlank(j) |
+            Self::PropertyParse(j) |
+            Self::OperatorParse(j) |
+            Self::ItemParse(j) |
+            Self::InputParse(j) |
+            Self::InputExist(j) => j.clone()
         }
     }
 }
+
+#[derive(Debug)]
+enum ExecErr<'j> {
+    SyntaxParse,
+
+    TypeParse(&'j Value),
+    TypeExist(&'j Value),
+    DataParse(&'j Value),
+    DataExist(&'j Value),
+    // SyntaxParse(&'j Value),
+    ConditionParse(&'j Value),
+    ConditionBlank(&'j Value),
+    PropertyParse(&'j Value),
+    OperatorParse(&'j Value),
+    ItemParse(&'j Value),
+    InputParse(&'j Value),
+    InputExist(&'j Value),
+}
+
+// impl<'j> InputType<'j> {
+
+//     fn execute_input(self, dnf: Dnf) -> Result<Dnf, ExecErr> {
+
+//     }
+// }
 
 pub async fn api_handler(Json(req): Json<ApiRequest>) -> Response {
 
@@ -344,9 +333,9 @@ pub async fn api_handler(Json(req): Json<ApiRequest>) -> Response {
     //     _ => {println!("{:#?}", req.input); Vec::new()},
     // };
     let input_processed: Result<Vec<InputType<'_>>, InputErr<'_>> = match &req.input {
-        Value::Array(a) => a.iter().map(InputType::from_value).collect(),
+        Value::Array(a) => if a.len() != 0 { a.iter().map(InputType::process_input).collect() } else { Err(InputErr::InputExist(&req.input)) },
         Value::String(_) |
-        Value::Object(_) => vec![InputType::from_value(&req.input)].into_iter().collect(),
+        Value::Object(_) => vec![InputType::process_input(&req.input)].into_iter().collect(),
         _ => {println!("{:#?}", req.input); Ok(Vec::new())},
     };
 
@@ -359,18 +348,18 @@ pub async fn api_handler(Json(req): Json<ApiRequest>) -> Response {
                 syntax: None,
                 rules: None,
                 warnings: Vec::new(),
-                errors: Value::Null,
+                error: Value::Null,
             }).into_response()},
         Err(e) => {
             println!("{:#?}", e);
             Json(ApiResponse {
                 success: false,
-                message: String::from("Error parsing input"),
+                message: String::from(e.as_message()),
                 json: None,
                 syntax: None,
                 rules: None,
                 warnings: Vec::new(),
-                errors: e.into_value(),
+                error: e.into_value(),
             }).into_response()
         },
     }
