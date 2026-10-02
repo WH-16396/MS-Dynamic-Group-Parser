@@ -7,6 +7,14 @@ use crate::rules::{
     // Rule,
 };
 
+pub fn tidy_dnf<'a>(dnf: Dnf<'a>) -> Dnf<'a> {
+    test_rm(
+        order_rules(
+            remove_duplicates(dnf)
+        )
+    )
+}
+
 pub fn remove_duplicates<'a>(mut dnf: Dnf<'a>) -> Dnf<'a> {
     for rule in dnf.iter_mut() {
         let mut seen = Vec::new();
@@ -20,6 +28,34 @@ pub fn remove_duplicates<'a>(mut dnf: Dnf<'a>) -> Dnf<'a> {
     }
     dnf
 }
+
+// pub fn remove_duplicates<'a>(mut dnf: Dnf<'a>) -> Dnf<'a> {
+//     dnf.iter().fold(
+//         Vec::new(),
+//         |mut seen, rule| 
+//         {
+//             rule.nodes.iter().filter(|item| match seen.contains(item) {
+//                 true => false,
+//                 _ => {
+//                     seen.push(item.clone());
+//                     true
+//                 }
+//             })
+//         }
+//     );
+
+//     for rule in dnf.iter_mut() {
+//         let mut seen = Vec::new();
+//         rule.nodes.retain(|item| match seen.contains(item) {
+//             true => false,
+//             _ => {
+//                 seen.push(item.clone());
+//                 true
+//             }
+//         })
+//     }
+//     dnf
+// }
 
 pub fn order_rules<'a>(mut dnf: Dnf<'a>) -> Dnf<'a> {
     use std::collections::HashMap;
@@ -35,4 +71,17 @@ pub fn order_rules<'a>(mut dnf: Dnf<'a>) -> Dnf<'a> {
         ); 
     }
     dnf
+}
+
+pub fn test_rm<'a>(dnf: Dnf<'a>) -> Dnf<'a> {
+    dnf.iter().fold(
+        Vec::new(),
+        |mut seen, rule| 
+        {
+            if !seen.contains(&rule) {
+                seen.push(rule.clone())
+            }
+            seen
+        }
+    )
 }

@@ -46,6 +46,13 @@ impl Operator {
             Self::Subtract =>           "-minus",
         }
     }
+    pub fn as_single(&self) -> Self {
+        match self {
+            Self::In =>                 Self::Equals,
+            Self::NotIn =>              Self::NotEquals,
+            &s => s,
+        }
+    }
     pub fn as_multiple(&self) -> Self {
         match self {
             Self::Equals =>             Self::In,
@@ -53,11 +60,11 @@ impl Operator {
             &s => s,
         }
     }
-    pub fn as_single(&self) -> Self {
+    pub fn is_single(&self) -> bool {
         match self {
-            Self::In =>                 Self::Equals,
-            Self::NotIn =>              Self::NotEquals,
-            &s => s,
+            Self::In |
+            Self::NotIn => false,
+            _ => true,
         }
     }
 }

@@ -20,6 +20,8 @@ use crate::{
         checks::check_rules, 
         reconstruct::reconstruct, 
         tidy::*,
+        Dnf,
+        Rule as Nodes,
     },
 };
 
@@ -171,7 +173,15 @@ impl<'j> FromValue<'j> for ConditionPart<'j> {
                     _ => return Err(InputErr::PropertyParse(val)),
                 },
                 operator: match obj.get_key_value("operator").ok_or(InputErr::OperatorParse(val))?.1 {
-                    Value::String(operator) => if operator == "*" { None } else { Operator::from_str(operator) },
+                    Value::String(operator) => if operator == "*" { None } else { 
+                        let parsed = Operator::from_str(operator).ok_or(InputErr::OperatorParse(val))?;
+
+                        if parsed.is_single() {
+                            Some(parsed)
+                        } else {
+                            return Err(InputErr::OperatorArray(val))
+                        } 
+                    },
                     _ => return Err(InputErr::OperatorParse(val)),
                 },
                 value: match obj.get_key_value("value").ok_or(InputErr::ItemParse(val))?.1 {
@@ -242,6 +252,7 @@ enum InputErr<'j> {
     ConditionBlank(&'j Value),
     PropertyParse(&'j Value),
     OperatorParse(&'j Value),
+    OperatorArray(&'j Value),
     ItemParse(&'j Value),
     InputParse(&'j Value),
     InputExist(&'j Value),
@@ -258,6 +269,7 @@ impl<'j> InputErr<'j> {
             Self::ConditionBlank(_) => "Failed to parse rule condition, please ensure that there are no wildcard values (*) for 'ruleAdd' types.",
             Self::PropertyParse(_) => "Failed to parse property.",
             Self::OperatorParse(_) => "Failed to parse operator.",
+            Self::OperatorArray(_) => "Invalid operator input, cannot use an array operator.",
             Self::ItemParse(_) => "Failed to parse input value.",
             Self::InputParse(_) => "Invalid value for the key 'input'.",
             Self::InputExist(_) => "Could not find the key 'input' within the request.",
@@ -274,6 +286,7 @@ impl<'j> InputErr<'j> {
             Self::ConditionBlank(j) |
             Self::PropertyParse(j) |
             Self::OperatorParse(j) |
+            Self::OperatorArray(j) |
             Self::ItemParse(j) |
             Self::InputParse(j) |
             Self::InputExist(j) => j.clone()
@@ -282,29 +295,46 @@ impl<'j> InputErr<'j> {
 }
 
 #[derive(Debug)]
-enum ExecErr<'j> {
+enum ExecErr { //<'j> {
     SyntaxParse,
 
-    TypeParse(&'j Value),
-    TypeExist(&'j Value),
-    DataParse(&'j Value),
-    DataExist(&'j Value),
-    // SyntaxParse(&'j Value),
-    ConditionParse(&'j Value),
-    ConditionBlank(&'j Value),
-    PropertyParse(&'j Value),
-    OperatorParse(&'j Value),
-    ItemParse(&'j Value),
-    InputParse(&'j Value),
-    InputExist(&'j Value),
+    // TypeParse(&'j Value),
+    // TypeExist(&'j Value),
+    // DataParse(&'j Value),
+    // DataExist(&'j Value),
+    // // SyntaxParse(&'j Value),
+    // ConditionParse(&'j Value),
+    // ConditionBlank(&'j Value),
+    // PropertyParse(&'j Value),
+    // OperatorParse(&'j Value),
+    // ItemParse(&'j Value),
+    // InputParse(&'j Value),
+    // InputExist(&'j Value),
 }
 
-// impl<'j> InputType<'j> {
+impl<'j> InputType<'j> {
 
-//     fn execute_input(self, dnf: Dnf) -> Result<Dnf, ExecErr> {
-
-//     }
-// }
+    fn execute_input(&'j self, mut dnf: Dnf<'j>) -> Result<Dnf<'j>, ExecErr> {
+        match self {
+            Self::SyntaxAdd(s) => {
+                match parse_rulebuilder(s) {
+                    Ok(o) => {
+                        dnf.append(&mut o.clone()); 
+                        Ok(tidy_dnf(dnf.clone()))
+                    },
+                    Err(_) => Err(ExecErr::SyntaxParse),
+                }
+            },
+            // Self::SyntaxRemove(s) => {
+                
+            // },
+            // Self::RuleAdd(r) => {},
+            // Self::RuleRemoveOnly(r) => {},
+            // Self::RuleRemoveAll(r) => {},
+            _ => return Err(ExecErr::SyntaxParse),
+        }
+    }
+}
 
 pub async fn api_handler(Json(req): Json<ApiRequest>) -> Response {
 
@@ -340,16 +370,43 @@ pub async fn api_handler(Json(req): Json<ApiRequest>) -> Response {
     };
 
     match input_processed {
-        Ok(o) => { ;
+        Ok(o) => { 
+            ;
+            // Json(ApiResponse {
+            //     success: true,
+            //     message: String::from("Success"),
+            //     json: None,
+            //     syntax: None,
+            //     rules: None,
+            //     warnings: Vec::new(),
+            //     error: Value::Null,
+            // }).into_response()},
+
+            // let mut test: Dnf = vec![Nodes::new()];
+            let executed: Result<Dnf<'_>, ExecErr> = o.iter()
+                .fold(
+                    // Ok(vec![Nodes::new()]), 
+                    Ok(Vec::new()), 
+                    |dnf, x| 
+                    {
+                        match dnf {
+                            Ok(o) => x.execute_input(o),
+                            Err(e) => Err(e),
+                        }
+                    }
+                );
+            
             Json(ApiResponse {
                 success: true,
                 message: String::from("Success"),
                 json: None,
-                syntax: None,
+                syntax: None, // Some(format!("{:#?}", executed)),
                 rules: None,
                 warnings: Vec::new(),
-                error: Value::Null,
+                error: serde_json::to_value(tidy_dnf(executed.unwrap())).unwrap(), // Value::Null,
             }).into_response()},
+
+
         Err(e) => {
             println!("{:#?}", e);
             Json(ApiResponse {
