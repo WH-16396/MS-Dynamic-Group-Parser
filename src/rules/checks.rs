@@ -14,7 +14,7 @@ use crate::{
 
 
 impl<'a> Condition<'a> {
-    fn contains(&self, check_node: &ConditionPart) -> bool {
+    pub fn contains(&self, check_node: &ConditionPart) -> bool {
         if match check_node.property {
                 Some(s) => s.eq_ignore_ascii_case(self.property),
                 None => true,
@@ -28,7 +28,7 @@ impl<'a> Condition<'a> {
     }
 }
 impl<'a> Rule<'a> {
-    fn contains(&self, check_node: &ConditionPart) -> bool {
+    pub fn contains(&self, check_node: &ConditionPart) -> bool {
         for node in self.nodes.iter() {
             if node.condition.contains(check_node) {
                 return true
@@ -145,3 +145,5 @@ fn match_rule<'a>(
 
     out
 }
+
+

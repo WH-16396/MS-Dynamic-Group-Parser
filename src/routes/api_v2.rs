@@ -21,7 +21,8 @@ use crate::{
         reconstruct::reconstruct, 
         tidy::*,
         Dnf,
-        Rule as Nodes,
+        Node,
+        Rule, // as Nodes,
     },
 };
 
@@ -119,7 +120,7 @@ impl<'j> InputType<'j> {
                 }
 
 
-                fn condition<'j, T: FromValue<'j>>(val: &'j Value) -> Result<Vec<T>, InputErr<'j>> {
+                fn condition<'j, T: RuleCondition<'j>>(val: &'j Value) -> Result<Vec<T>, InputErr<'j>> {
                     Ok(match val {
                         Value::Object(_) => Ok(vec![
                             T::from_value(val)?
@@ -158,11 +159,11 @@ impl<'j> InputType<'j> {
     }
 }
 
-trait FromValue<'j> {
+trait RuleCondition<'j> {
     fn from_value(val: &'j Value) -> Result<Self, InputErr<'j>> where Self: Sized;
 }
 
-impl<'j> FromValue<'j> for ConditionPart<'j> {
+impl<'j> RuleCondition<'j> for ConditionPart<'j> {
     fn from_value(val: &'j Value) -> Result<Self, InputErr<'j>> {
         match val {
             Value::Object(obj) => Ok(Self {
@@ -197,7 +198,7 @@ impl<'j> FromValue<'j> for ConditionPart<'j> {
     }
 }
 
-impl<'j> FromValue<'j> for Condition<'j> {
+impl<'j> RuleCondition<'j> for Condition<'j> {
     fn from_value(val: &'j Value) -> Result<Self, InputErr<'j>>  {
         match ConditionPart::from_value(val) {
             Ok(part) => Ok(Self {
@@ -295,32 +296,19 @@ impl<'j> InputErr<'j> {
 }
 
 #[derive(Debug)]
-enum ExecErr { //<'j> {
+enum ExecErr {
     SyntaxParse,
-
-    // TypeParse(&'j Value),
-    // TypeExist(&'j Value),
-    // DataParse(&'j Value),
-    // DataExist(&'j Value),
-    // // SyntaxParse(&'j Value),
-    // ConditionParse(&'j Value),
-    // ConditionBlank(&'j Value),
-    // PropertyParse(&'j Value),
-    // OperatorParse(&'j Value),
-    // ItemParse(&'j Value),
-    // InputParse(&'j Value),
-    // InputExist(&'j Value),
 }
 
 impl<'j> InputType<'j> {
-
-    fn execute_input(&'j self, mut dnf: Dnf<'j>) -> Result<Dnf<'j>, ExecErr> {
+    fn to_executable(&'j self) -> Result<ExecType<'j>, ExecErr> {
         match self {
             Self::SyntaxAdd(s) => {
                 match parse_rulebuilder(s) {
                     Ok(o) => {
-                        dnf.append(&mut o.clone()); 
-                        Ok(tidy_dnf(dnf.clone()))
+                        // dnf.append(&mut o.clone()); 
+                        // Ok(ExecType::Add(tidy_dnf(dnf.clone())))
+                        Ok(ExecType::Add(tidy_dnf(o)))
                     },
                     Err(_) => Err(ExecErr::SyntaxParse),
                 }
@@ -328,10 +316,56 @@ impl<'j> InputType<'j> {
             // Self::SyntaxRemove(s) => {
                 
             // },
-            // Self::RuleAdd(r) => {},
-            // Self::RuleRemoveOnly(r) => {},
-            // Self::RuleRemoveAll(r) => {},
+            Self::RuleAdd(r) => {
+                Ok(ExecType::Add(vec![
+                    r.iter().fold(
+                        Rule::new(),
+                        |mut rule, condition| 
+                        {
+                            rule.nodes.push(Node::from(condition.clone())); rule 
+                        }
+                    )
+                ]))
+            },
+            Self::RuleRemoveOnly(r) => { Ok(ExecType::RemoveAll(r.clone())) },
+            Self::RuleRemoveAll(r) => { Ok(ExecType::RemoveAll(r.clone())) },
             _ => return Err(ExecErr::SyntaxParse),
+        }
+    }
+}
+
+
+enum ExecType<'a> {
+    Add(Dnf<'a>),
+    RemoveOnly(Vec<ConditionPart<'a>>),
+    RemoveAll(Vec<ConditionPart<'a>>),
+}
+
+impl<'a> ExecType<'a> {
+    fn execute(self, mut dnf: Dnf<'a>) -> Dnf<'a> {
+        match self {
+            Self::Add(a) => {
+                dnf.append(&mut a.clone()); 
+                tidy_dnf(dnf.clone())
+            },
+            Self::RemoveOnly(ro) => {
+                dnf
+            },
+            Self::RemoveAll(ra) => {
+                dnf.into_iter().filter(|rule| 
+                    ra.iter().fold(
+                        false,
+                        |keep, check| {
+                            match keep {
+                                false => {
+                                    !rule.contains(check)
+                                },
+                                true => true,
+                            }
+                        }
+                    )
+                ).collect()
+            },
         }
     }
 }
@@ -387,10 +421,13 @@ pub async fn api_handler(Json(req): Json<ApiRequest>) -> Response {
                 .fold(
                     // Ok(vec![Nodes::new()]), 
                     Ok(Vec::new()), 
-                    |dnf, x| 
+                    |result, x| 
                     {
-                        match dnf {
-                            Ok(o) => x.execute_input(o),
+                        match result {
+                            Ok(dnf) => match x.to_executable() {
+                                Ok(exec) => Ok(exec.execute(dnf)),
+                                Err(e) => Err(e),
+                            },
                             Err(e) => Err(e),
                         }
                     }
