@@ -73,30 +73,6 @@ pub struct ApiResponse {
     error: Value,
 }
 
-// Syntax input
-// {
-//     "type": "syntaxAdd",
-//     "data": "syntax rules"
-// }
-
-// Rule input
-// {
-//     "type": "syntaxAdd",
-//     "data": [
-//         {
-//             "property": "user.property",
-//             "operator": "-eq",
-//             "value": "Value"
-//         }
-//     ]
-// }
-
-
-// pub struct InputErr {
-//     message: &'static str,
-//     json: Value,
-// }
-
                                 
 #[derive(Debug)]
 enum InputType<'j> {
@@ -348,6 +324,24 @@ impl<'a> ExecType<'a> {
                 dnf.append(&mut a.clone()); 
                 tidy_dnf(dnf.clone())
             },
+            // Self::RemoveOnly(ro) => {
+            //     dnf.into_iter()
+            //         .filter(|rule| 
+            //             iters_equal_anyorder(
+            //                 ro.clone().into_iter(), 
+            //                 rule.nodes.clone().into_iter()
+            //                     .map(|x| ConditionPart::from(x.condition))
+            //             )
+            //         ).collect()
+            // },
+            // Self::RemoveOnly(ro) => {
+            //     dnf.into_iter()
+            //         .filter(|rule| 
+            //             rule.nodes.clone().into_iter()
+            //                 .map(|x| ConditionPart::from(x.condition));
+            //             ro.clone().into_iter()
+            //         ).collect()
+            // },
             Self::RemoveOnly(ro) => {
                 dnf
             },
@@ -370,32 +364,39 @@ impl<'a> ExecType<'a> {
     }
 }
 
+
+pub fn order_test<'a>(mut parts: Vec<ConditionPart<'a>>) -> Vec<ConditionPart<'a>> {
+    use std::collections::HashMap;
+    let mut map: HashMap<ConditionPart<'_>, i32> = HashMap::new();
+
+    for part in parts.iter() {
+        *map.entry(part.clone()).or_insert(0) += 1;
+    }
+    parts.sort_by(|a, b| 
+        map.get(&b.clone()).unwrap()
+        .cmp(map.get(&a.clone()).unwrap())
+    ); 
+    parts
+}
+
+// https://users.rust-lang.org/t/assert-vectors-equal-in-any-order/38716/10
+use std::{hash::Hash,collections::{HashMap,hash_map::Entry}};
+fn iters_equal_anyorder<T: Eq + Hash>(i1:impl Iterator<Item = T>, i2: impl Iterator<Item = T>) -> bool {
+    fn get_lookup<T: Eq + Hash>(iter:impl Iterator<Item = T>) -> HashMap<T, usize> {
+        let mut lookup = HashMap::<T, usize>::new();
+        for value in iter {
+            match lookup.entry(value) {
+                Entry::Occupied(entry) => { *entry.into_mut() += 1; },
+                Entry::Vacant(entry) => { entry.insert(0); }
+            }
+        }
+        lookup
+    }
+    get_lookup(i1) == get_lookup(i2)
+}
+
 pub async fn api_handler(Json(req): Json<ApiRequest>) -> Response {
 
-    // println!("{:#?}\n\n\n----------------------------------------------\n\n\n", req.input);
-
-    // enum RequestInput {
-    //     Rule {
-    //         remove: bool,
-    //         input_type: Vec<>,
-    //     },
-
-    // }
-
-    
-
-
-    // let f: Vec<Result<InputType<'_>, InputErr>> = if let Value::Array(a) = &req.input {
-    //     a.iter().map(InputType::from_value).collect()
-    // } else { Vec::new() };
-
-    // let q = match &req.input {
-    //     Value::Array(a) => a.iter().map(InputType::from_value)
-    //         .collect::<Vec<Result<InputType<'_>, InputErr>>>(),
-    //     Value::String(_) |
-    //     Value::Object(_) => vec![InputType::from_value(&req.input)],
-    //     _ => {println!("{:#?}", req.input); Vec::new()},
-    // };
     let input_processed: Result<Vec<InputType<'_>>, InputErr<'_>> = match &req.input {
         Value::Array(a) => if a.len() != 0 { a.iter().map(InputType::process_input).collect() } else { Err(InputErr::InputExist(&req.input)) },
         Value::String(_) |
@@ -405,21 +406,8 @@ pub async fn api_handler(Json(req): Json<ApiRequest>) -> Response {
 
     match input_processed {
         Ok(o) => { 
-            ;
-            // Json(ApiResponse {
-            //     success: true,
-            //     message: String::from("Success"),
-            //     json: None,
-            //     syntax: None,
-            //     rules: None,
-            //     warnings: Vec::new(),
-            //     error: Value::Null,
-            // }).into_response()},
-
-            // let mut test: Dnf = vec![Nodes::new()];
             let executed: Result<Dnf<'_>, ExecErr> = o.iter()
                 .fold(
-                    // Ok(vec![Nodes::new()]), 
                     Ok(Vec::new()), 
                     |result, x| 
                     {
@@ -457,137 +445,6 @@ pub async fn api_handler(Json(req): Json<ApiRequest>) -> Response {
             }).into_response()
         },
     }
-
-
-
-    // for item in q {
-    //     match item {
-    //         Ok(o) => {
-    //             println!("\nSUCCESS: {:#?}\n", o);
-    //         },
-    //         Err(e) => {
-    //             println!("\nERROR: {:#?}\n", e);
-    //             Json(ApiResponse {
-    //                 success: false,
-    //                 message: String::from("Error parsing input"),
-    //                 json: None,
-    //                 syntax: None,
-    //                 rules: None,
-    //                 warnings: Vec::new(),
-    //                 errors: vec![],
-    //             }).into_response()
-    //         },
-    //     }
-    // }
-
-    // Json(ApiResponse {
-    //     success: false,
-    //     message: String::from("Error parsing input"),
-    //     json: None,
-    //     syntax: None,
-    //     rules: None,
-    //     warnings: Vec::new(),
-    //     errors: vec![],
-    // }).into_response()
-
-    // let mut q = Vec::new();
-    // let mut w: Vec<Result<InputType, InputErr>> = Vec::new();
-
-    // match req.input {
-    //     Value::String(s) => (),
-    //     Value::Array(a) => 
-    //     // {
-    //     //     for child in a.into_iter() {
-    //     //         println!("{:#?}\n\n\n\n\n", child);
-                
-    //     //         // match child {
-    //     //         //     Value::Object(o) => println!("{:#?}", o),
-    //     //         //     _ => (),
-    //     //         // };
-
-    //     //         q.push(InputType::from_value(&child));
-    //     //     }
-
-    //     // },
-    //     _ => (),
-    // }
-
-
-    
-
-    // If warnings are on then warn on the 
-    // if Some(true) == req.warn_risks {
-    //     dnf = check_rules(dnf);
-    // }
-
-    // // Defines the conditions for returning JSON as a default when no other conditions are selected
-    // let return_json = req.return_json != Some(false) && req.return_syntax != Some(true) && req.return_rules != Some(true);
-
-    // if return_json || req.return_syntax == Some(true) {
-    //     let tree = reconstruct(&dnf);
-        
-    //     if return_json {
-    //         res.json = tree.as_ref().and_then(|b| serde_json::to_value(b).ok());
-    //     }
-
-    //     if req.return_syntax == Some(true) {
-    //         res.syntax = match tree {
-    //             Some(s) => Some(s.to_syntax_string()),
-    //             None => None,
-    //         };
-    //     }
-
-    // }
-
-    // if req.return_rules == Some(true) {
-    //     res.rules = match serde_json::to_value(&dnf) {
-    //         Ok(o) => Some(o),
-    //         Err(_) => None,
-    //     };
-    // }
-    // match parse_rulebuilder(req.input.as_str()) 
-    // {
-    //     Ok(mut dnf) => {
-    //         let mut res = ApiResponse {
-    //             success: true,
-    //             message: String::from("Successfully parsed input"),
-    //             // json: serde_json::from_str(&serialize_syntax(&tree)).unwrap(),
-    //             json: None,
-    //             syntax: None,
-    //             rules: None,
-    //             warnings: Vec::new(),
-    //             errors: Vec::new(),
-    //         };
-
-    //         // Parses the input syntax string separately and merges into the main.
-    //         // Handled first so that other arguments build off of merged rules
-    //         if let Some(rules) = &req.merge_rules {
-    //             match parse_rulebuilder(rules.as_str()) {
-    //                 Ok(mut o) => dnf.append(&mut o),
-    //                 Err(e) => res.errors.push(parse_err_message(e, "Failed to parse merge rules")),
-    //             }
-    //         }
-            
-    //         // // If the mergeRules argument is passed then add it to the dnf.
-    //         // // Handled first so that other arguments build off of merged rules
-    //         // if let Some(rules) = &req.modify_users {
-    //         //     match parse_rulebuilder(rules.as_str()) {
-    //         //         Ok(mut o) => dnf.append(&mut o),
-    //         //         Err(_) => res.errors.push(String::from("Failed to parse merge rules.")),
-    //         //     }
-    //         // }
-
-    //         // Cleans the rules e.g. duplicate rules
-    //         dnf = remove_duplicates(dnf);
-    //         dnf = order_rules(dnf);
-
-
-            
-
-    //         Json(res).into_response()
-    //     }
-        
-    // }
 }
 
 fn parse_err_message<R>(error: pest::error::Error<R>, message: &str) -> Value {
