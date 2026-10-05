@@ -1,506 +1,347 @@
+//! `POST /api/v2` - applies a list of actions to an initially empty rule set.
+//!
+//! `input` is either a syntax string, a single action object or an array of
+//! action objects. Each action object looks like `{"type": ..., "data": ...}`:
+//!
+//! | `type`               | `data`                                              |
+//! | -------------------- | --------------------------------------------------- |
+//! | `syntaxAdd`          | rule syntax string, OR-ed onto the rules            |
+//! | `ruleAdd`            | condition(s), AND-ed into one new rule              |
+//! | `ruleRemoveMatching` | condition(s); removes rules made of exactly these   |
+//! | `ruleRemoveContains` | condition(s); removes rules that contain all these  |
+//!
+//! A condition is `{"property": ..., "operator": ..., "value": ...}`. The
+//! remove actions accept `"*"` for any part as a wildcard.
+
 use axum::{
-    response::{IntoResponse, Response},
     Json,
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value::{self, Object}, json};
+use serde_json::Value as JsonValue;
+use std::{collections::HashMap, hash::Hash};
+
 use crate::{
-    condition::{
-        validate_property,
-        Property,
-        Condition, 
-        ConditionPart, 
-        operator::Operator, 
-        // property::{
-        //     self, 
-        // }, 
-        value::Value as Item,
-    }, 
-    parse::parser::parse_rulebuilder, 
-    rules::{
-        checks::check_rules, 
-        reconstruct::reconstruct, 
-        tidy::*,
-        Dnf,
-        Node,
-        Rule, // as Nodes,
-    },
+    model::{Condition, ConditionPattern, Dnf, Node, Operator, Property, Rule, Value},
+    parser,
+    process::tidy::tidy,
+    routes::{Output, OutputOptions, render_output},
 };
 
 #[derive(Deserialize)]
 pub struct ApiRequest {
-    // String input of rule syntax
-    input: Value,
+    /// The action(s) to apply - see the module docs.
+    input: JsonValue,
 
-    // Argument to return JSON tree format for the syntax, use when information 
-    // needs to be displayed to a user or modified externally to the API response
-    //
-    // By default is TRUE if neither 'returnSyntax' or 'returnRules' have arguments
-    // are present
-    #[serde(rename = "returnJson")]
-    return_json: Option<bool>,
-
-    // Argument to return recompiled syntax string, use when automating since it's
-    // more efficient
-    #[serde(rename = "returnSyntax")]
-    return_syntax: Option<bool>,
-
-    // Argument to return individual AND rules for each unique branch of access 
-    #[serde(rename = "returnRules")]
-    return_rules: Option<bool>,
-
-    // Checks all of the rules for common process errors
-    #[serde(rename = "checkRisks")]
-    warn_risks: Option<bool>,
-
-    // Checks all of the rules for common process errors
+    // TODO: not implemented yet
+    #[allow(dead_code)]
     #[serde(rename = "globalConditions")]
-    global_conditions: Option<Value>,
+    global_conditions: Option<JsonValue>,
+
+    #[serde(flatten)]
+    options: OutputOptions,
 }
 
 #[derive(Serialize)]
 pub struct ApiResponse {
     success: bool,
     message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    json: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    syntax: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    rules: Option<Value>,
+    #[serde(flatten)]
+    output: Output,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<String>,
-    #[serde(skip_serializing_if = "Value::is_null")]
-    error: Value,
+    /// The piece of `input` that caused the failure, if any.
+    #[serde(skip_serializing_if = "JsonValue::is_null")]
+    error: JsonValue,
 }
 
-                                
+impl ApiResponse {
+    fn failure(message: &str, error: JsonValue) -> Response {
+        Json(ApiResponse {
+            success: false,
+            message: String::from(message),
+            output: Output::default(),
+            warnings: Vec::new(),
+            error,
+        })
+        .into_response()
+    }
+}
+
+pub async fn handler(Json(request): Json<ApiRequest>) -> Response {
+    let actions = match parse_input(&request.input) {
+        Ok(actions) => actions,
+        Err(error) => {
+            println!("{:#?}", error);
+            return ApiResponse::failure(error.kind.message(), error.json.clone());
+        }
+    };
+
+    // Apply each action in order, stopping at the first failure
+    let dnf = actions
+        .into_iter()
+        .try_fold(Vec::new(), |dnf, action| action.apply(dnf));
+
+    match dnf {
+        Ok(dnf) => Json(ApiResponse {
+            success: true,
+            message: String::from("Successfully parsed input"),
+            output: render_output(dnf, &request.options),
+            warnings: Vec::new(),
+            error: JsonValue::Null,
+        })
+        .into_response(),
+        Err(error) => {
+            println!("{:#?}", error);
+            ApiResponse::failure("Failed to parse syntax input", JsonValue::Null)
+        }
+    }
+}
+
+/// Reads `input` into a list of actions.
+fn parse_input(input: &JsonValue) -> Result<Vec<Action<'_>>, InputError<'_>> {
+    match input {
+        JsonValue::Array(items) if items.is_empty() => Err(InputError::new(InputErrorKind::EmptyInput, input)),
+        JsonValue::Array(items) => items.iter().map(Action::from_json).collect(),
+        JsonValue::String(_) | JsonValue::Object(_) => Ok(vec![Action::from_json(input)?]),
+        _ => {
+            println!("{:#?}", input);
+            Ok(Vec::new())
+        }
+    }
+}
+
+
+
+//
+// ACTIONS
+//
+
+/// One step requested in `input`.
 #[derive(Debug)]
-enum InputType<'j> {
-    SyntaxAdd(String),
-    // SyntaxRemove(String),
-    RuleAdd(Vec<Condition<'j>>),
-    RuleRemoveMatching(Vec<ConditionPart<'j>>),
-    RuleRemoveContains(Vec<ConditionPart<'j>>),
+enum Action<'src> {
+    SyntaxAdd(&'src str),
+    RuleAdd(Vec<Condition<'src>>),
+    RuleRemoveMatching(Vec<ConditionPattern<'src>>),
+    RuleRemoveContains(Vec<ConditionPattern<'src>>),
 }
 
-impl<'j> InputType<'j> {
-    fn process_input(val: &'j Value) -> Result<Self, InputErr<'j>> {
-        let t = match val {
-            Value::Object(obj) => {
+/// The only way an action can fail once it has been read.
+#[derive(Debug)]
+enum ActionError {
+    InvalidSyntax,
+}
 
-                fn syntax<'j>(obj: &'j Value) -> Result<String, InputErr<'j>> {
-                    match obj {
-                        Value::String(s) => Ok(s.clone()),
-                        _ => Err(InputErr::SyntaxParse(obj)),
-                    }
+impl<'src> Action<'src> {
+    /// Reads a bare syntax string or a `{"type": ..., "data": ...}` object.
+    fn from_json(json: &'src JsonValue) -> Result<Self, InputError<'src>> {
+        use InputErrorKind::*;
+
+        let action = match json {
+            JsonValue::String(syntax) => Self::SyntaxAdd(syntax),
+            JsonValue::Object(object) => {
+                let data = object.get("data").ok_or(InputError::new(MissingData, json))?;
+                let action_type = object.get("type").ok_or(InputError::new(MissingType, json))?;
+
+                match action_type.as_str() {
+                    Some("syntaxAdd") => Self::SyntaxAdd(
+                        data.as_str().ok_or(InputError::new(InvalidSyntaxData, data))?,
+                    ),
+                    Some("ruleAdd") => Self::RuleAdd(conditions_from_json(data)?),
+                    Some("ruleRemoveMatching") => Self::RuleRemoveMatching(conditions_from_json(data)?),
+                    Some("ruleRemoveContains") => Self::RuleRemoveContains(conditions_from_json(data)?),
+                    _ => return Err(InputError::new(InvalidType, json)),
                 }
-
-
-                fn condition<'j, T: RuleCondition<'j>>(val: &'j Value) -> Result<Vec<T>, InputErr<'j>> {
-                    Ok(match val {
-                        Value::Object(_) => Ok(vec![
-                            T::from_value(val)?
-                        ]),
-                        Value::Array(a) => a.into_iter()
-                            .map(|x| T::from_value(x))
-                            .collect(),
-                        _ => Err(InputErr::DataParse(val)),
-                    }?)
-                }
-
-                
-                if let Some(data) = obj.get_key_value("data") {
-
-                    match obj.get_key_value("type")
-                        .ok_or(InputErr::TypeExist(&val))?.1 
-                    {
-                        Value::String(s) => 
-                            match s.as_str() {
-                                "syntaxAdd" =>      Ok(InputType::SyntaxAdd(syntax(data.1)?)),
-                                // "syntaxRemove" =>   Ok(InputType::SyntaxRemove(syntax(data.1)?)),
-                                "ruleAdd" =>        Ok(InputType::RuleAdd(condition(data.1)?)),
-                                "ruleRemoveMatching" => Ok(InputType::RuleRemoveMatching(condition(data.1)?)),
-                                "ruleRemoveContains" =>  Ok(InputType::RuleRemoveContains(condition(data.1)?)),
-                                _ =>                Err(InputErr::TypeParse(val)),
-                            },
-                        _ => Err(InputErr::TypeParse(val)),
-                    }
-                } else { Err(InputErr::DataExist(val)) }
-            },
-            Value::String(s) => Ok(Self::SyntaxAdd(s.clone())),
-            _ => Err(InputErr::InputParse(val)),
+            }
+            _ => return Err(InputError::new(InvalidInput, json)),
         };
 
-        println!("{:#?}", t); t
+        println!("{:#?}", action);
+        Ok(action)
+    }
+
+    /// Applies this action to `dnf`, returning the updated rules.
+    fn apply(self, dnf: Dnf<'src>) -> Result<Dnf<'src>, ActionError> {
+        Ok(match self {
+            Self::SyntaxAdd(syntax) => {
+                let parsed = parser::parse(syntax).map_err(|_| ActionError::InvalidSyntax)?;
+                add_rules(dnf, tidy(parsed))
+            }
+
+            Self::RuleAdd(conditions) => {
+                let mut rule = Rule::new();
+                rule.nodes.extend(conditions.into_iter().map(Node::from));
+                add_rules(dnf, vec![rule])
+            }
+
+            // Drop rules whose conditions are exactly the given set, in any
+            // order. Wildcards never match here, since every condition in a
+            // rule is fully specified
+            Self::RuleRemoveMatching(patterns) => dnf
+                .into_iter()
+                .filter(|rule| {
+                    let conditions = rule.nodes.iter().map(|node| ConditionPattern::from(node.condition));
+                    !same_elements(patterns.iter().cloned(), conditions)
+                })
+                .collect(),
+
+            // Drop rules that contain a match for every given pattern
+            Self::RuleRemoveContains(patterns) => dnf
+                .into_iter()
+                .filter(|rule| !patterns.iter().all(|pattern| rule.contains(pattern)))
+                .collect(),
+        })
     }
 }
 
-trait RuleCondition<'j> {
-    fn from_value(val: &'j Value) -> Result<Self, InputErr<'j>> where Self: Sized;
+fn add_rules<'src>(mut dnf: Dnf<'src>, mut rules: Dnf<'src>) -> Dnf<'src> {
+    dnf.append(&mut rules);
+    tidy(dnf)
 }
 
-impl<'j> RuleCondition<'j> for ConditionPart<'j> {
-    fn from_value(val: &'j Value) -> Result<Self, InputErr<'j>> {
-        match val {
-            Value::Object(obj) => Ok(Self {
-                property: match obj.get_key_value("property").ok_or(InputErr::PropertyParse(val))?.1 {
-                    Value::String(property) => if property == "*" { None } else { 
-                        Some(validate_property(Property(property)).ok_or(InputErr::PropertyParse(val))?) 
-                    },
-                    _ => return Err(InputErr::PropertyParse(val)),
-                },
-                operator: match obj.get_key_value("operator").ok_or(InputErr::OperatorParse(val))?.1 {
-                    Value::String(operator) => if operator == "*" { None } else { 
-                        let parsed = Operator::from_str(operator).ok_or(InputErr::OperatorParse(val))?;
-
-                        if parsed.is_single() {
-                            Some(parsed)
-                        } else {
-                            return Err(InputErr::OperatorArray(val))
-                        } 
-                    },
-                    _ => return Err(InputErr::OperatorParse(val)),
-                },
-                value: match obj.get_key_value("value").ok_or(InputErr::ItemParse(val))?.1 {
-                    Value::String(s) => if s == "*" { None } else { Some(Item::String(s)) },
-                    Value::Number(n) => Some(Item::Number(n.as_i64().ok_or(InputErr::ItemParse(val))?)),
-                    Value::Bool(b) => Some(Item::Boolean(*b)),
-                    Value::Null => Some(Item::Null),
-                    _ => return Err(InputErr::ItemParse(val)),
-                } 
-            }),
-            _ => Err(InputErr::ConditionParse(val)),
+/// True when both iterators yield the same items, in any order.
+///
+/// https://users.rust-lang.org/t/assert-vectors-equal-in-any-order/38716/10
+fn same_elements<T: Eq + Hash>(left: impl Iterator<Item = T>, right: impl Iterator<Item = T>) -> bool {
+    fn count<T: Eq + Hash>(items: impl Iterator<Item = T>) -> HashMap<T, usize> {
+        let mut counts = HashMap::new();
+        for item in items {
+            *counts.entry(item).or_insert(0) += 1;
         }
+        counts
+    }
+    count(left) == count(right)
+}
+
+
+
+//
+// CONDITIONS
+//
+
+/// Reads a single condition object or an array of them.
+fn conditions_from_json<'src, T: FromJson<'src>>(data: &'src JsonValue) -> Result<Vec<T>, InputError<'src>> {
+    match data {
+        JsonValue::Object(_) => Ok(vec![T::from_json(data)?]),
+        JsonValue::Array(items) => items.iter().map(T::from_json).collect(),
+        _ => Err(InputError::new(InputErrorKind::InvalidData, data)),
     }
 }
 
-impl<'j> RuleCondition<'j> for Condition<'j> {
-    fn from_value(val: &'j Value) -> Result<Self, InputErr<'j>>  {
-        match ConditionPart::from_value(val) {
-            Ok(part) => Ok(Self {
-                property: part.property.ok_or(InputErr::ConditionBlank(val))?,
-                operator: part.operator.ok_or(InputErr::ConditionBlank(val))?,
-                value: part.value.ok_or(InputErr::ConditionBlank(val))?,
-            }),
-            Err(e) => Err(e),
-        }
-    }
+trait FromJson<'src>: Sized {
+    fn from_json(json: &'src JsonValue) -> Result<Self, InputError<'src>>;
 }
 
-impl Operator {
-    fn from_str(str: &str) -> Option<Self> {
-        let arg = if &str[..1] == "-" {&str[1..]} else {&str};
+/// Reads `{"property": ..., "operator": ..., "value": ...}`, where `"*"` in
+/// any position is a wildcard.
+impl<'src> FromJson<'src> for ConditionPattern<'src> {
+    fn from_json(json: &'src JsonValue) -> Result<Self, InputError<'src>> {
+        use InputErrorKind::*;
+        let error = |kind| InputError::new(kind, json);
 
-        let matched =
-        if arg.eq_ignore_ascii_case("plus")             { Self::Add }                   else 
-        if arg.eq_ignore_ascii_case("all")              { Self::All }                   else 
-        if arg.eq_ignore_ascii_case("any")              { Self::Any }                   else 
-        if arg.eq_ignore_ascii_case("contains")         { Self::Contains }              else 
-        if arg.eq_ignore_ascii_case("endsWith")         { Self::EndsWith }              else 
-        if arg.eq_ignore_ascii_case("eq")               { Self::Equals }                else 
-        if arg.eq_ignore_ascii_case("ge")               { Self::GreaterThanOrEqual }    else 
-        if arg.eq_ignore_ascii_case("in")               { Self::In }                    else 
-        if arg.eq_ignore_ascii_case("le")               { Self::LessThanOrEqual }       else 
-        if arg.eq_ignore_ascii_case("match")            { Self::Match }                 else 
-        if arg.eq_ignore_ascii_case("notContains")      { Self::NotContains }           else 
-        if arg.eq_ignore_ascii_case("notEndsWith")      { Self::NotEndsWith }           else 
-        if arg.eq_ignore_ascii_case("ne")               { Self::NotEquals }             else 
-        if arg.eq_ignore_ascii_case("notIn")            { Self::NotIn }                 else 
-        if arg.eq_ignore_ascii_case("notMatch")         { Self::NotMatch }              else 
-        if arg.eq_ignore_ascii_case("notStartsWith")    { Self::NotStartsWith }         else 
-        if arg.eq_ignore_ascii_case("startsWith")       { Self::StartsWith }            else 
-        if arg.eq_ignore_ascii_case("minus")            { Self::Subtract }              else 
-        { return None };
-        
-        Some(matched)
-    }
-}
+        let JsonValue::Object(object) = json else {
+            return Err(error(InvalidCondition));
+        };
 
+        let property = match object.get("property").ok_or(error(InvalidProperty))? {
+            JsonValue::String(property) if property == "*" => None,
+            JsonValue::String(property) => {
+                Some(Property::validated(property).ok_or(error(InvalidProperty))?)
+            }
+            _ => return Err(error(InvalidProperty)),
+        };
 
-
-#[derive(Debug)]
-enum InputErr<'j> {
-    TypeParse(&'j Value),
-    TypeExist(&'j Value),
-    DataParse(&'j Value),
-    DataExist(&'j Value),
-    SyntaxParse(&'j Value),
-    ConditionParse(&'j Value),
-    ConditionBlank(&'j Value),
-    PropertyParse(&'j Value),
-    OperatorParse(&'j Value),
-    OperatorArray(&'j Value),
-    ItemParse(&'j Value),
-    InputParse(&'j Value),
-    InputExist(&'j Value),
-}
-impl<'j> InputErr<'j> {
-    fn as_message(&self) -> &str {
-        match self {
-            Self::TypeParse(_) => "Invalid value for the key 'type'.",
-            Self::TypeExist(_) => "Could not find the key 'type' within the input object.",
-            Self::DataParse(_) => "Invalid value for the key 'data', please ensure rule inputs are an object or object array.",
-            Self::DataExist(_) => "Could not find the key 'data' within the input object.",
-            Self::SyntaxParse(_) => "Failed to parse 'data', please ensure direct syntax inputs are a string.",
-            Self::ConditionParse(_) => "Failed to parse rule condition.",
-            Self::ConditionBlank(_) => "Failed to parse rule condition, please ensure that there are no wildcard values (*) for 'ruleAdd' types.",
-            Self::PropertyParse(_) => "Failed to parse property.",
-            Self::OperatorParse(_) => "Failed to parse operator.",
-            Self::OperatorArray(_) => "Invalid operator input, cannot use an array operator.",
-            Self::ItemParse(_) => "Failed to parse input value.",
-            Self::InputParse(_) => "Invalid value for the key 'input'.",
-            Self::InputExist(_) => "Could not find the key 'input' within the request.",
-        }
-    }
-    fn into_value(self) -> Value {
-        match self {
-            Self::TypeParse(j) |
-            Self::TypeExist(j) |
-            Self::DataParse(j) |
-            Self::DataExist(j) |
-            Self::SyntaxParse(j) |
-            Self::ConditionParse(j) |
-            Self::ConditionBlank(j) |
-            Self::PropertyParse(j) |
-            Self::OperatorParse(j) |
-            Self::OperatorArray(j) |
-            Self::ItemParse(j) |
-            Self::InputParse(j) |
-            Self::InputExist(j) => j.clone()
-        }
-    }
-}
-
-#[derive(Debug)]
-enum ExecErr {
-    SyntaxParse,
-}
-
-impl<'j> InputType<'j> {
-    fn to_executable(&'j self) -> Result<ExecType<'j>, ExecErr> {
-        match self {
-            Self::SyntaxAdd(s) => {
-                match parse_rulebuilder(s) {
-                    Ok(o) => {
-                        // dnf.append(&mut o.clone()); 
-                        // Ok(ExecType::Add(tidy_dnf(dnf.clone())))
-                        Ok(ExecType::Add(tidy_dnf(o)))
-                    },
-                    Err(_) => Err(ExecErr::SyntaxParse),
+        let operator = match object.get("operator").ok_or(error(InvalidOperator))? {
+            JsonValue::String(operator) if operator == "*" => None,
+            JsonValue::String(operator) => {
+                let operator = Operator::parse(operator).ok_or(error(InvalidOperator))?;
+                // Conditions hold a single value, so array operators can't apply
+                if !operator.is_single() {
+                    return Err(error(ArrayOperator));
                 }
-            },
-            // Self::SyntaxRemove(s) => {
-                
-            // },
-            Self::RuleAdd(r) => {
-                Ok(ExecType::Add(vec![
-                    r.iter().fold(
-                        Rule::new(),
-                        |mut rule, condition| 
-                        {
-                            rule.nodes.push(Node::from(condition.clone())); rule 
-                        }
-                    )
-                ]))
-            },
-            Self::RuleRemoveMatching(r) => { Ok(ExecType::RemoveMatching(r.clone())) },
-            Self::RuleRemoveContains(r) => { Ok(ExecType::RemoveContains(r.clone())) },
-            _ => return Err(ExecErr::SyntaxParse),
-        }
+                Some(operator)
+            }
+            _ => return Err(error(InvalidOperator)),
+        };
+
+        let value = match object.get("value").ok_or(error(InvalidValue))? {
+            JsonValue::String(string) if string == "*" => None,
+            JsonValue::String(string) => Some(Value::String(string)),
+            JsonValue::Number(number) => Some(Value::Number(number.as_i64().ok_or(error(InvalidValue))?)),
+            JsonValue::Bool(boolean) => Some(Value::Boolean(*boolean)),
+            JsonValue::Null => Some(Value::Null),
+            _ => return Err(error(InvalidValue)),
+        };
+
+        Ok(Self { property, operator, value })
+    }
+}
+
+/// Same as `ConditionPattern`, but wildcards are rejected.
+impl<'src> FromJson<'src> for Condition<'src> {
+    fn from_json(json: &'src JsonValue) -> Result<Self, InputError<'src>> {
+        let pattern = ConditionPattern::from_json(json)?;
+        let wildcard = || InputError::new(InputErrorKind::Wildcard, json);
+        Ok(Self {
+            property: pattern.property.ok_or_else(wildcard)?,
+            operator: pattern.operator.ok_or_else(wildcard)?,
+            value: pattern.value.ok_or_else(wildcard)?,
+        })
     }
 }
 
 
-enum ExecType<'a> {
-    Add(Dnf<'a>),
-    RemoveMatching(Vec<ConditionPart<'a>>),
-    RemoveContains(Vec<ConditionPart<'a>>),
+
+//
+// ERRORS
+//
+
+/// A problem with the shape of `input`, along with the part of it at fault.
+#[derive(Debug)]
+struct InputError<'src> {
+    kind: InputErrorKind,
+    json: &'src JsonValue,
 }
 
-impl<'a> ExecType<'a> {
-    fn execute(self, mut dnf: Dnf<'a>) -> Dnf<'a> {
+impl<'src> InputError<'src> {
+    fn new(kind: InputErrorKind, json: &'src JsonValue) -> Self {
+        Self { kind, json }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum InputErrorKind {
+    InvalidType,
+    MissingType,
+    InvalidData,
+    MissingData,
+    InvalidSyntaxData,
+    InvalidCondition,
+    Wildcard,
+    InvalidProperty,
+    InvalidOperator,
+    ArrayOperator,
+    InvalidValue,
+    InvalidInput,
+    EmptyInput,
+}
+
+impl InputErrorKind {
+    fn message(&self) -> &'static str {
         match self {
-            Self::Add(a) => {
-                dnf.append(&mut a.clone()); 
-                tidy_dnf(dnf.clone())
-            },
-            Self::RemoveMatching(ro) => {
-                dnf.into_iter()
-                    .filter(|rule| 
-                        !iters_equal_anyorder(
-                            ro.clone().into_iter(), 
-                            rule.nodes.clone().into_iter()
-                                .map(|x| ConditionPart::from(x.condition))
-                        )
-                    ).collect()
-            },
-            Self::RemoveContains(ra) => {
-                dnf.into_iter().filter(|rule| 
-                    ra.iter().fold(
-                        false,
-                        |keep, check| {
-                            match keep {
-                                false => {
-                                    !rule.contains(check)
-                                },
-                                true => true,
-                            }
-                        }
-                    )
-                ).collect()
-            },
+            Self::InvalidType => "Invalid value for the key 'type'.",
+            Self::MissingType => "Could not find the key 'type' within the input object.",
+            Self::InvalidData => "Invalid value for the key 'data', please ensure rule inputs are an object or object array.",
+            Self::MissingData => "Could not find the key 'data' within the input object.",
+            Self::InvalidSyntaxData => "Failed to parse 'data', please ensure direct syntax inputs are a string.",
+            Self::InvalidCondition => "Failed to parse rule condition.",
+            Self::Wildcard => "Failed to parse rule condition, please ensure that there are no wildcard values (*) for 'ruleAdd' types.",
+            Self::InvalidProperty => "Failed to parse property.",
+            Self::InvalidOperator => "Failed to parse operator.",
+            Self::ArrayOperator => "Invalid operator input, cannot use an array operator.",
+            Self::InvalidValue => "Failed to parse input value.",
+            Self::InvalidInput => "Invalid value for the key 'input'.",
+            Self::EmptyInput => "Could not find the key 'input' within the request.",
         }
     }
-}
-
-
-// https://users.rust-lang.org/t/assert-vectors-equal-in-any-order/38716/10
-use std::{hash::Hash,collections::{HashMap,hash_map::Entry}};
-use std::fmt::Debug;
-fn iters_equal_anyorder<T: Eq + Hash + Debug>(i1:impl Iterator<Item = T>, i2: impl Iterator<Item = T>) -> bool {
-    // println!("\n\n\nITER 1: {:#?}\nITER 2: {:#?}\n\n\n", i1, i2);
-    fn get_lookup<T: Eq + Hash>(iter:impl Iterator<Item = T>) -> HashMap<T, usize> {
-        let mut lookup = HashMap::<T, usize>::new();
-        for value in iter {
-            // println!("{:#?}", value);
-            match lookup.entry(value) {
-                Entry::Occupied(entry) => { *entry.into_mut() += 1; },
-                Entry::Vacant(entry) => { entry.insert(0); }
-            }
-        }
-        lookup
-    }
-    get_lookup(i1) == get_lookup(i2)
-}
-
-pub async fn api_handler(Json(req): Json<ApiRequest>) -> Response {
-
-    let input_processed: Result<Vec<InputType<'_>>, InputErr<'_>> = match &req.input {
-        Value::Array(a) => if a.len() != 0 { a.iter().map(InputType::process_input).collect() } else { Err(InputErr::InputExist(&req.input)) },
-        Value::String(_) |
-        Value::Object(_) => vec![InputType::process_input(&req.input)].into_iter().collect(),
-        _ => {println!("{:#?}", req.input); Ok(Vec::new())},
-    };
-
-    match input_processed {
-        Ok(o) => { 
-            let executed: Result<Dnf<'_>, ExecErr> = o.iter()
-                .fold(
-                    Ok(Vec::new()), 
-                    |result, x| 
-                    {
-                        match result {
-                            Ok(dnf) => match x.to_executable() {
-                                Ok(exec) => Ok(exec.execute(dnf)),
-                                Err(e) => Err(e),
-                            },
-                            Err(e) => Err(e),
-                        }
-                    }
-                );
-
-            match executed {
-                Ok(mut o) => {
-                    
-                    let mut res = ApiResponse {
-                        success: true,
-                        message: String::from("Successfully parsed input"),
-                        // json: serde_json::from_str(&serialize_syntax(&tree)).unwrap(),
-                        json: None,
-                        syntax: None,
-                        rules: None,
-                        warnings: Vec::new(),
-                        error: Value::Null,
-                    };
-
-                    // Cleans the rules e.g. duplicate rules
-                    o = remove_duplicates(o);
-                    o = order_rules(o);
-
-
-                    // If warnings are on then warn on the 
-                    if Some(true) == req.warn_risks {
-                        o = check_rules(o);
-                    }
-
-                    let return_json = 
-                        req.return_json != Some(true) && req.return_syntax != Some(true) && req.return_rules != Some(true) ||
-                        req.return_json == Some(true);
-
-                    if return_json || req.return_syntax == Some(true) {
-                        let tree = reconstruct(&o);
-                        
-                        if return_json {
-                            res.json = tree.as_ref().and_then(|b| serde_json::to_value(b).ok());
-                        }
-
-                        if req.return_syntax == Some(true) {
-                            res.syntax = match tree {
-                                Some(s) => Some(s.to_syntax_string()),
-                                None => None,
-                            };
-                        }
-                    }
-
-                    if req.return_rules == Some(true) {
-                        res.rules = match serde_json::to_value(&o) {
-                            Ok(o) => Some(o),
-                            Err(_) => None,
-                        };
-                    }
-
-                    Json(res).into_response()
-                },
-                    
-                Err(e) => {
-                    println!("{:#?}", e);
-                    Json(ApiResponse {
-                        success: false,
-                        message: String::from("Failed to parse syntax input"),
-                        json: None,
-                        syntax: None,
-                        rules: None,
-                        warnings: Vec::new(),
-                        error: Value::Null,
-                    }).into_response()
-                },
-            }
-        },
-            // Json(ApiResponse {
-            //     success: true,
-            //     message: String::from("Success"),
-            //     json: None,
-            //     syntax: None, // Some(format!("{:#?}", executed)),
-            //     rules: None,
-            //     warnings: Vec::new(),
-            //     error: serde_json::to_value(tidy_dnf(executed.unwrap())).unwrap(), // Value::Null,
-            // }).into_response()},
-
-
-        Err(e) => {
-            println!("{:#?}", e);
-            Json(ApiResponse {
-                success: false,
-                message: String::from(e.as_message()),
-                json: None,
-                syntax: None,
-                rules: None,
-                warnings: Vec::new(),
-                error: e.into_value(),
-            }).into_response()
-        },
-    }
-}
-
-fn parse_err_message<R>(error: pest::error::Error<R>, message: &str) -> Value {
-    use pest::error::InputLocation;
-    let location: (usize, usize) = match error.location {
-        InputLocation::Pos(p) => (p, p),
-        InputLocation::Span(s) => s,
-    };
-    json!({
-        "message": String::from(message),
-        "location": location,
-    })
 }

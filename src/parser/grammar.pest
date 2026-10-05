@@ -1,55 +1,58 @@
-MembershipRules     = _{ SOI ~ Segment ~ EOI }
+// Grammar for Entra dynamic group membership rule syntax.
+//
+// Rules prefixed with '_' are silent (they match but produce no token), '@'
+// rules are atomic (no implicit whitespace and no inner tokens) and '$' rules
+// are compound-atomic (no implicit whitespace, but inner tokens are kept).
 
+// Entry point - the whole input must be a single segment
+MembershipRules = _{ SOI ~ Segment ~ EOI }
 
+// Operands joined by 'and' / 'or'. Brackets recurse into a nested Segment
+Segment  = { ( ( Node | Brackets ) ~ Comparator )* ~ ( Node | Brackets ) }
+Brackets = _{ "(" ~ Segment ~ ")" }
 
-Segment     = { ( ( Node | Brackets ) ~ Comparator )* ~ ( Node | Brackets ) }
-
-
-
-Brackets    = _{ "(" ~ Segment ~ ")" }
-
-// Nodes and Rule Conditions
-// Node = { Property ~ Operator ~ ( Value | Array ) }
-// Node = { Property ~ ( Operator | NotOperator ) ~ ( Value | Array ) }
-// Node            = _{ SingleNode | ArrayNode }
-// SingleNode       = { Property ~ SingleOp ~ Value }
-// ArrayNode    = { Property ~ ArrayOp ~ Array }
-
-Node  = {
-    ( Blank | Property ) ~ 
-    ( Blank | Operator | NotOperator ) ~ 
+// A single condition, e.g. 'user.department -eq "Sales"'.
+// NOTE: 'Blank' and 'NotOperator' are accepted here but not yet handled by
+// the parser
+Node = {
+    ( Blank | Property ) ~
+    ( Blank | Operator | NotOperator ) ~
     ( Blank | Value | Array )
 }
 
-Property        = @{ Object ~ "." ~ Variable }
-    Object              = { ^"user" | ^"device" }
-    Variable            = @{ VariableCharacter* }
-    VariableCharacter   = { !(WHITESPACE) ~ ANY }
+// 'user.<name>' or 'device.<name>'
+Property = @{ Object ~ "." ~ Variable }
+    Object            = { ^"user" | ^"device" }
+    Variable          = @{ VariableCharacter* }
+    VariableCharacter = { !(WHITESPACE) ~ ANY }
 
 
-Value   = _{ Boolean | Number | StringWrapper | Null | "(" ~ Value ~ ")"}
-Blank   = { "*" }
-    
+//
+// VALUES
+//
+
+Value = _{ Boolean | Number | StringWrapper | Null | "(" ~ Value ~ ")" }
+Blank = { "*" }
+
+    // Booleans may optionally be quoted
     Boolean = _{ True | False }
-        True    = { ^"true"  | ^"\"true\""  }
-        False   = { ^"false" | ^"\"false\"" }
+        True  = { ^"true"  | ^"\"true\""  }
+        False = { ^"false" | ^"\"false\"" }
 
-    StringWrapper    = _{ "\"" ~ String ~ "\"" }
-        String      = @{ StringCharacter* }
+    // The quotes are silent so the String token is just the contents
+    StringWrapper   = _{ "\"" ~ String ~ "\"" }
+        String          = @{ StringCharacter* }
         StringCharacter = { !("\"" | "\n") ~ ANY }
 
-    Number  = { '0'..'9' }
-    Null    = @{ "$"? ~ ^"null" }
+    Number = { '0'..'9' }
+    Null   = @{ "$"? ~ ^"null" }
 
-Array   = {
+Array = {
     "[" ~ "]" |
     "[" ~ Value ~ ("," ~ Value)* ~ "]"
 }
 
-
-
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
-
 
 
 //
@@ -57,52 +60,55 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 //
 // https://learn.microsoft.com/en-gb/entra/identity/users/groups-dynamic-membership
 //
+// All operators are case-insensitive and the leading '-' is optional
+//
 
-OpPrefix    = _{ "-" }
+OpPrefix = _{ "-" }
 
-// "Comparator" is an Operator
-Comparator  = _{ And | Or }
-And     = @{ OpPrefix? ~ ^"and" }
-Or      = @{ OpPrefix? ~ ^"or"  }
+// Logical operators joining operands within a Segment
+Comparator = _{ And | Or }
+    And = @{ OpPrefix? ~ ^"and" }
+    Or  = @{ OpPrefix? ~ ^"or"  }
 
+// Comparison operator within a Node
 Operator = ${
-    OpPrefix? ~ 
+    OpPrefix? ~
     (
         SingleOp
         | ArrayOp
         | ComparativeOp
         | RegExOp
-        | MultiValueOp 
+        | MultiValueOp
         | MathOp
     )
 }
 NotOperator = { Not? ~ Operator }
 
-// Functional Operator Categories
-SingleOp        = _{ Contains | EndsWith | Equals | NotEndsWith | NotContains | NotEquals | NotStartsWith | StartsWith }
-ArrayOp         = _{ In | NotIn }
-ComparativeOp   = _{ GreaterThanOrEqual | LessThanOrEqual }
-RegExOp         = _{ Match | NotMatch }
-MultiValueOp    = _{ All | Any }
-MathOp          = _{ Add | Subtract }
+// Operators grouped by what they do
+SingleOp      = _{ Contains | EndsWith | Equals | NotEndsWith | NotContains | NotEquals | NotStartsWith | StartsWith }
+ArrayOp       = _{ In | NotIn }
+ComparativeOp = _{ GreaterThanOrEqual | LessThanOrEqual }
+RegExOp       = _{ Match | NotMatch }
+MultiValueOp  = _{ All | Any }
+MathOp        = _{ Add | Subtract }
 
-// All Operators
-Add                 = @{ OpPrefix? ~ ^"plus" }
-All                 = @{ OpPrefix? ~ ^"all" }
-Any                 = @{ OpPrefix? ~ ^"any" }
-Contains            = @{ OpPrefix? ~ ^"contains" }
-EndsWith            = @{ OpPrefix? ~ ^"endsWith" }
-Equals              = @{ OpPrefix? ~ ^"eq" }
-GreaterThanOrEqual  = @{ OpPrefix? ~ ^"ge" }
-In                  = @{ OpPrefix? ~ ^"in" }
-LessThanOrEqual     = @{ OpPrefix? ~ ^"le" }
-Match               = @{ OpPrefix? ~ ^"match" }
-Not                 = @{ OpPrefix? ~ ^"not" }
-NotContains         = @{ OpPrefix? ~ ^"notContains" }
-NotEndsWith         = @{ OpPrefix? ~ ^"notEndsWith" }
-NotEquals           = @{ OpPrefix? ~ ^"ne" }
-NotIn               = @{ OpPrefix? ~ ^"notIn"  }
-NotMatch            = @{ OpPrefix? ~ ^"notMatch"  }
-NotStartsWith       = @{ OpPrefix? ~ ^"notStartsWith" }
-StartsWith          = @{ OpPrefix? ~ ^"startsWith" }
-Subtract            = @{ OpPrefix? ~ ^"minus" }
+// Every operator
+Add                = @{ OpPrefix? ~ ^"plus" }
+All                = @{ OpPrefix? ~ ^"all" }
+Any                = @{ OpPrefix? ~ ^"any" }
+Contains           = @{ OpPrefix? ~ ^"contains" }
+EndsWith           = @{ OpPrefix? ~ ^"endsWith" }
+Equals             = @{ OpPrefix? ~ ^"eq" }
+GreaterThanOrEqual = @{ OpPrefix? ~ ^"ge" }
+In                 = @{ OpPrefix? ~ ^"in" }
+LessThanOrEqual    = @{ OpPrefix? ~ ^"le" }
+Match              = @{ OpPrefix? ~ ^"match" }
+Not                = @{ OpPrefix? ~ ^"not" }
+NotContains        = @{ OpPrefix? ~ ^"notContains" }
+NotEndsWith        = @{ OpPrefix? ~ ^"notEndsWith" }
+NotEquals          = @{ OpPrefix? ~ ^"ne" }
+NotIn              = @{ OpPrefix? ~ ^"notIn"  }
+NotMatch           = @{ OpPrefix? ~ ^"notMatch"  }
+NotStartsWith      = @{ OpPrefix? ~ ^"notStartsWith" }
+StartsWith         = @{ OpPrefix? ~ ^"startsWith" }
+Subtract           = @{ OpPrefix? ~ ^"minus" }

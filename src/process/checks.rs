@@ -1,148 +1,78 @@
-use crate::{
-    condition::{
-        Property,
-        Condition,
-        ConditionPart, 
-        operator::Operator, 
-        value::Value
+//! Flags rules that could let unintended users into the group.
+
+use crate::model::{ConditionPattern, Dnf, Operator, Property, Rule, Value, Warning};
+
+/// A risk check: when a rule is missing any of the `required` conditions,
+/// every node matching `flagged` gets `warning`, and so does the rule itself
+/// if at least one node was flagged.
+struct Check {
+    required: &'static [ConditionPattern<'static>],
+    flagged: ConditionPattern<'static>,
+    warning: Warning,
+}
+
+const CHECKS: &[Check] = &[
+    // Every rule should exclude disabled accounts
+    Check {
+        required: &[ConditionPattern {
+            property: Some(Property("user.accountEnabled")),
+            operator: Some(Operator::Equals),
+            value: Some(Value::Boolean(true)),
+        }],
+        flagged: ConditionPattern::ANY,
+        warning: Warning::NotEnabled,
     },
-    rules::{
-        Dnf, Rule, Warning,
-    }
-};
+    // Every rule should exclude guest / external accounts
+    Check {
+        required: &[ConditionPattern {
+            property: Some(Property("user.userType")),
+            operator: Some(Operator::Equals),
+            value: Some(Value::String("Member")),
+        }],
+        flagged: ConditionPattern::ANY,
+        warning: Warning::NotMember,
+    },
+    // Job titles aren't unique across departments, so a job title rule
+    // should also pin the department
+    Check {
+        required: &[ConditionPattern {
+            property: Some(Property("user.department")),
+            operator: Some(Operator::Equals),
+            value: None,
+        }],
+        flagged: ConditionPattern {
+            property: Some(Property("user.jobTitle")),
+            operator: Some(Operator::Equals),
+            value: None,
+        },
+        warning: Warning::MissingDept,
+    },
+];
 
-
-impl<'a> Condition<'a> {
-    pub fn contains(&self, check_node: &ConditionPart) -> bool {
-        if match check_node.property {
-                Some(s) => s == self.property,
-                None => true,
-            } &&
-            (Some(self.operator) == check_node.operator || !check_node.operator.is_some()) &&
-            (Some(self.value) == check_node.value || !check_node.value.is_some()) 
-        {
-            return true
+/// Runs every check against every rule, attaching warnings in place.
+pub fn check_rules(mut dnf: Dnf<'_>) -> Dnf<'_> {
+    for rule in dnf.iter_mut() {
+        for check in CHECKS {
+            apply_check(rule, check);
         }
-        false
     }
+    dnf
 }
-impl<'a> Rule<'a> {
-    pub fn contains(&self, check_node: &ConditionPart) -> bool {
-        for node in self.nodes.iter() {
-            if node.condition.contains(check_node) {
-                return true
-            }
+
+fn apply_check(rule: &mut Rule<'_>, check: &Check) {
+    if check.required.iter().all(|pattern| rule.contains(pattern)) {
+        return;
+    }
+
+    let mut flagged_any = false;
+    for node in rule.nodes.iter_mut() {
+        if node.condition.matches(&check.flagged) {
+            node.warnings.push(check.warning);
+            flagged_any = true;
         }
-        false
+    }
+
+    if flagged_any {
+        rule.warnings.push(check.warning);
     }
 }
-
-pub fn check_rules<'a>(dnf: Dnf<'a>) -> Dnf<'a> {
-    let mut out: Dnf<'a> = Vec::new();
-    for r in dnf.into_iter() {
-        let mut rule: Rule<'a> = r.clone();
-        let mut warnings: Vec<(Vec<&ConditionPart<'_>>, &ConditionPart<'_>, &Warning)> = Vec::new(); 
-
-        // CHECKS
-        
-        // --------------------------
-        // Check for enabled accounts
-        // --------------------------
-        warnings.push((
-            vec![
-                &ConditionPart {
-                    property: Some(Property("user.accountEnabled")),
-                    operator: Some(Operator::Equals),
-                    value: Some(Value::Boolean(true))
-                }, 
-            ],
-            &ConditionPart {
-                property: None,
-                operator: None,
-                value: None
-            },
-            &Warning::NotEnabled
-        ));
-        
-        // -------------------------
-        // Check for member accounts
-        // -------------------------
-        warnings.push((
-            vec![
-                &ConditionPart {
-                    property: Some(Property("user.userType")),
-                    operator: Some(Operator::Equals),
-                    value: Some(Value::String("Member"))
-                }, 
-            ],
-            &ConditionPart {
-                property: None,
-                operator: None,
-                value: None
-            },
-            &Warning::NotMember
-        ));
-
-        // -------------------------------------------------
-        // Check for department when a jobtitle is specified
-        // -------------------------------------------------
-        warnings.push((
-            vec![
-                &ConditionPart {
-                    property: Some(Property("user.department")),
-                    operator: Some(Operator::Equals),
-                    value: None
-                }, 
-            ],
-            &ConditionPart {
-                    property: Some(Property("user.jobTitle")),
-                    operator: Some(Operator::Equals),
-                    value: None
-            },
-            &Warning::MissingDept
-        ));
-
-        for criteria in warnings {
-            rule = match_rule(
-                &rule, 
-                criteria.0,
-                criteria.1,
-                criteria.2,
-            );
-        }
-        
-        out.push(rule);
-    }
-    out
-}
-
-
-fn match_rule<'a>(
-    rule: &Rule<'a>, 
-    criteria: Vec<&ConditionPart>, 
-    node_criteria: &ConditionPart, 
-    warning: &'a Warning
-) -> Rule<'a> {
-    let mut out: Rule<'a> = rule.clone();
-
-    let contains_criteria = criteria.into_iter().fold(true, |matched, node| match matched {
-        true => rule.contains(node),
-        false => false,
-    });
-
-    let is_warning = if !contains_criteria {
-        out.nodes.iter_mut()
-            .fold(false, |matched, node| match node.condition.contains(node_criteria) {
-                true => {node.warnings.push(warning); true},
-                false => matched,
-            })
-    } else { 
-        false 
-    };
-
-    if is_warning {out.warnings.push(*warning);}
-
-    out
-}
-
-

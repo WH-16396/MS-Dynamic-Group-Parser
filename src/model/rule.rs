@@ -1,71 +1,54 @@
-pub mod tidy;
-pub mod checks;
-pub mod reconstruct;
-
 use serde::Serialize;
 
-use crate::condition::{
-    Condition, 
-    operator::Operator, 
-    value::Value
-};
+use crate::model::{Condition, ConditionPattern};
 
-//
-// NODE IS A CONTAINER FOR CONDITIONS AND WARNINGS
-//
+/// A condition plus any warnings raised against it by `process::checks`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Node<'a> {
-    pub condition: Condition<'a>,
-    pub warnings: Vec<&'a Warning>,
-}
-impl<'a> From<Condition<'a>> for Node<'a> {
-    fn from(item: Condition<'a>) -> Self {
-        Node {
-            condition: item,
-            warnings: Vec::new(),
-        }
-    } 
+pub struct Node<'src> {
+    pub condition: Condition<'src>,
+    pub warnings: Vec<Warning>,
 }
 
-//
-// SYNTAX STRUCTURE
-//
+impl<'src> From<Condition<'src>> for Node<'src> {
+    fn from(condition: Condition<'src>) -> Self {
+        Node { condition, warnings: Vec::new() }
+    }
+}
 
-// These make up the data structure of the 'Rules' system 
-
-pub type Dnf<'a> = Vec<Rule<'a>>;
-
+/// One branch of access: a user matches the rule when they match *every*
+/// node in it (the nodes are implicitly AND-ed together).
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Rule<'a> {
-    pub nodes: Vec<Node<'a>>, 
-    pub warnings: Vec<Warning>
+pub struct Rule<'src> {
+    pub nodes: Vec<Node<'src>>,
+    pub warnings: Vec<Warning>,
 }
-impl<'a> Rule<'a> {
+
+impl<'src> Rule<'src> {
     pub fn new() -> Self {
-        Self {
-            nodes: Vec::new(), 
-            warnings: Vec::new()
-        }
+        Self { nodes: Vec::new(), warnings: Vec::new() }
     }
-    pub fn into_string(self) -> String {
-        self.nodes.into_iter()
-            .map(|x| x.condition.to_string())
-            .collect::<Vec<String>>()
-            .join(" ")
+
+    /// True when any node in the rule matches `pattern`.
+    pub fn contains(&self, pattern: &ConditionPattern) -> bool {
+        self.nodes.iter().any(|node| node.condition.matches(pattern))
     }
 }
 
+/// Disjunctive normal form: a user is a member when they match *any* rule.
+///
+/// Every input, however it was bracketed, is flattened into this shape so
+/// that rules can be compared, merged and removed independently of how they
+/// were originally written. `process::reconstruct` turns it back into a tree.
+pub type Dnf<'src> = Vec<Rule<'src>>;
 
-
-//
-// WARNINGS
-//
+/// A risk flagged by `process::checks`.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, Serialize)]
 pub enum Warning {
     NotEnabled,
     NotMember,
     MissingDept,
 }
+
 impl Warning {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -74,20 +57,15 @@ impl Warning {
             Self::MissingDept => "missingDept",
         }
     }
-    pub fn message(&self) -> String {
+
+    pub fn message(&self) -> &'static str {
         match self {
-            Self::NotEnabled => String::from("'user.accountEnabled -eq True' is \
-             not universally applied to all rules, disabled accounts can still \
-             match these rules."),
-            Self::NotMember => String::from("'user.userType -eq \"Member\"' is \
-             not universally applied to all rules, external accounts can still \
-             match these rules."),
-            Self::MissingDept => String::from("'user.jobTitle' rule is missing a \
-             'user.department' condition, unintended users might match these rules."),
+            Self::NotEnabled => "'user.accountEnabled -eq True' is not universally \
+                applied to all rules, disabled accounts can still match these rules.",
+            Self::NotMember => "'user.userType -eq \"Member\"' is not universally \
+                applied to all rules, external accounts can still match these rules.",
+            Self::MissingDept => "'user.jobTitle' rule is missing a 'user.department' \
+                condition, unintended users might match these rules.",
         }
     }
 }
-
-
-
-

@@ -1,20 +1,156 @@
-use pest::{Parser, error::Error, iterators::Pair};
-use pest_derive::Parser;
-use crate::condition::Property;
-use crate::rules::{
-    Node,
-    Dnf,
-    // Imported as 'Nodes' to prevent conflicts with the 'Rules' enum since
-    // that gets automatically imported as part of '#[derive(Parser)]'
-    Rule as Nodes,
-};
-use crate::condition::{
-    Condition, 
-    operator::Operator, 
-    value::Value
-};
+//! Turns rule syntax text into a `Dnf`.
+//!
+//! Parsing happens in two steps: pest builds a parse tree from
+//! `grammar.pest`, then `expand` walks that tree and multiplies the brackets
+//! out into a flat OR-list of AND-rules.
 
-impl Rule {
+use pest::{Parser, error::Error, iterators::Pair};
+
+use crate::model::{Condition, Dnf, Node, Operator, Property, Rule, Value};
+
+/// The pest-generated parser lives in its own module so that its `Rule` enum
+/// (one variant per grammar rule) doesn't clash with `model::Rule`.
+mod grammar {
+    #[derive(pest_derive::Parser)]
+    #[grammar = "parser/grammar.pest"]
+    pub struct SyntaxParser;
+}
+
+use grammar::{Rule as Token, SyntaxParser};
+
+/// Parses rule syntax into a `Dnf`, borrowing property names and string
+/// values from `syntax`.
+pub fn parse(syntax: &str) -> Result<Dnf<'_>, Error<Token>> {
+    let root = SyntaxParser::parse(Token::MembershipRules, syntax)?
+        .next()
+        .unwrap();
+
+    Ok(expand(root, vec![Rule::new()]))
+}
+
+/// Expands a `Segment` or `Node` from the parse tree, AND-ing the result onto
+/// every rule in `dnf`.
+fn expand<'src>(pair: Pair<'src, Token>, mut dnf: Dnf<'src>) -> Dnf<'src> {
+    match pair.as_rule() {
+        // A segment is a list of operands separated by 'and' / 'or'. Operands
+        // between two 'or's are AND-ed into the same set of rules ('current'),
+        // and each 'or' starts a fresh set. 'alternatives' collects the
+        // finished sets.
+        Token::Segment => {
+            let mut alternatives = Vec::new();
+            let mut current = vec![Rule::new()];
+
+            for child in pair.into_inner() {
+                match child.as_rule() {
+                    Token::And => {}
+                    Token::Or => {
+                        alternatives.append(&mut current);
+                        current = vec![Rule::new()];
+                    }
+                    Token::Segment | Token::Node => current = expand(child, current),
+                    _ => {
+                        println!("ERROR - expand() failed to handle child of Segment, {:#?}", child);
+                        unreachable!()
+                    }
+                }
+            }
+            alternatives.append(&mut current);
+
+            // (a or b) and (c or d) -> ac or ad or bc or bd
+            dnf = cross_product(dnf, alternatives);
+        }
+
+        // A single condition is AND-ed onto every rule
+        Token::Node => {
+            if let Some(nodes) = parse_node(pair) {
+                for node in nodes {
+                    for rule in dnf.iter_mut() {
+                        rule.nodes.push(node.clone())
+                    }
+                }
+            }
+        }
+
+        _ => {
+            println!("ERROR - expand() failed to handle token, {:#?}", pair);
+            unreachable!()
+        }
+    };
+    dnf
+}
+
+/// ANDs two DNFs together by pairing every rule on the left with every rule
+/// on the right.
+fn cross_product<'src>(left: Dnf<'src>, right: Dnf<'src>) -> Dnf<'src> {
+    let mut out = Vec::with_capacity(left.len() * right.len());
+    for left_rule in &left {
+        for right_rule in &right {
+            let mut rule = left_rule.clone();
+            rule.nodes.extend(right_rule.nodes.iter().cloned());
+            out.push(rule);
+        }
+    }
+    out
+}
+
+/// Converts a `property operator value` triple into nodes. An array value is
+/// split into one node per element, with the operator narrowed to its
+/// single-value form (`-in` -> `-eq`).
+fn parse_node(pair: Pair<'_, Token>) -> Option<Vec<Node<'_>>> {
+    let mut parts = pair.into_inner();
+    let mut out = Vec::new();
+
+    let property = Property(parts.next()?.as_str());
+
+    let operator_pair = parts.next()?;
+    let operator = match operator_pair.as_rule() {
+        Token::Operator => operator_pair.into_inner().next()?.as_rule().as_operator(),
+        _ => {
+            println!("ERROR - Tried to parse operator: {:?}", operator_pair.as_rule());
+            unreachable!()
+        }
+    };
+
+    let value_pair = parts.next()?;
+    match value_pair.as_rule() {
+        Token::String | Token::True | Token::False | Token::Number | Token::Null => {
+            out.push(Node::from(Condition {
+                property,
+                operator,
+                value: parse_value(value_pair)?,
+            }))
+        }
+        Token::Array => {
+            for element in value_pair.into_inner() {
+                out.push(Node::from(Condition {
+                    property,
+                    operator: operator.as_single(),
+                    value: parse_value(element)?,
+                }));
+            }
+        }
+        _ => {
+            println!("ERROR - Tried to parse value: {:?}", value_pair.as_rule());
+            unreachable!()
+        }
+    }
+    Some(out)
+}
+
+fn parse_value(pair: Pair<'_, Token>) -> Option<Value<'_>> {
+    match pair.as_rule() {
+        Token::String => Some(Value::String(pair.as_str())),
+        Token::True => Some(Value::Boolean(true)),
+        Token::False => Some(Value::Boolean(false)),
+        Token::Number => Some(Value::Number(pair.as_str().parse().ok()?)),
+        Token::Null => Some(Value::Null),
+        _ => None,
+    }
+}
+
+impl Token {
+    /// Maps an operator token to its `Operator`. Only called on the inner
+    /// token of `Token::Operator`, so any other token is a grammar bug.
     fn as_operator(&self) -> Operator {
         match self {
             Self::Add =>                Operator::Add,
@@ -37,122 +173,5 @@ impl Rule {
             Self::Subtract =>           Operator::Subtract,
             _ => unreachable!(),
         }
-    }
-}
-
-#[derive(Parser)]
-#[grammar = "parse/syntax.pest"]
-struct SyntaxParser;
-
-pub fn parse_rulebuilder<'a>(raw: &'a str) -> Result<Dnf<'a>, Error<Rule>> {
-
-    // Parses the syntax using the pest rules in 'membership_rules.pest' 
-    let parse = SyntaxParser::parse(Rule::MembershipRules, raw);
-
-    // println!("Rules: {:#?}", parse);
-
-    let dnf = parse_tree(parse?.next().unwrap(), vec![Nodes::new()]);
-
-    Ok(dnf)
-}
-
-fn parse_tree<'a>(pair: Pair<'a, Rule>, mut dnf: Dnf<'a>) -> Dnf<'a> {
-    match pair.as_rule() {
-        Rule::Segment => {
-            let mut tree = Vec::new();
-            let mut branch = vec![Nodes::new()];
-
-            for child in pair.into_inner() {
-                match child.as_rule() {
-                    Rule::And => {},
-                    Rule::Or  => {
-                        tree.append(&mut branch);
-                        branch = vec![Nodes::new()];
-                    },
-                    Rule::Segment | 
-                    Rule::Node 
-                    => branch = parse_tree(child, branch),
-                    _ => { println!("ERROR - parse_tree() failed to handle child of Rule::Segment, {:#?}", child); unreachable!() },
-                }
-            }
-            tree.append(&mut branch);
-            dnf = merge_tree(dnf, tree);
-        },
-        Rule::Node => {
-            if let Some(nodes) = parse_node(pair) {
-                for node in nodes {
-                    for row in dnf.iter_mut() {
-                        row.nodes.push(node.clone())
-                    }
-                }
-            }
-        },
-        _ => { println!("ERROR - parse_tree() failed to handle Rule, {:#?}", pair); unreachable!() },
-    };
-    dnf
-}
-
-fn merge_tree<'a>(left: Dnf<'a>, right: Dnf<'a>) -> Dnf<'a> {
-    let mut out = Vec::with_capacity(left.len() * right.len());
-    for l in &left {
-        for r in &right {
-            let mut row = l.clone();
-            row.nodes.extend(r.nodes.iter().cloned());
-            out.push(row);
-        }
-    }
-    out
-}
-
-fn parse_node(pair: Pair<Rule>) -> Option<Vec<Node>> {
-    let mut inner = pair.into_inner();
-    let mut out: Vec<Node> = Vec::new();
-
-    let property = inner.next()?.as_str();
-    let operator_pair = inner.next()?;
-
-    let operator = match operator_pair.as_rule() {
-        Rule::Operator => {
-            operator_pair.into_inner().next()?.as_rule()
-        },
-        _ => { println!("ERROR - Tried to parse operator: {:?}", operator_pair.as_rule()); unreachable!() },
-    };
-
-    let value_pair = inner.next()?;
-
-    match value_pair.as_rule() {
-        Rule::String |
-        Rule::True |
-        Rule::False |
-        Rule::Number |
-        Rule::Null => out.push(
-            Node::from(Condition {
-                property: Property(property),
-                operator: operator.as_operator(),
-                value: parse_value(value_pair)?,
-            })
-        ),
-        Rule::Array => {
-            for value in value_pair.into_inner() {
-                out.push(Node::from(Condition{
-                    property: Property(property),
-                    operator: operator.as_operator().as_single(),
-                    value: parse_value(value)?,
-                }));
-            }
-        },
-        _ => { println!("ERROR - Tried to parse value: {:?}", value_pair.as_rule()); unreachable!() },
-    }
-    Some(out)
-}
-
-fn parse_value(value: Pair<Rule>) -> Option<Value> {
-    match &value.as_rule() {
-        Rule::String => Some(Value::String(value.as_str())),
-        Rule::True => Some(Value::Boolean(true)),
-        Rule::False => Some(Value::Boolean(false)),
-        Rule::Number => Some(Value::Number(value.as_str().parse().ok()?)),
-        Rule::Null => Some(Value::Null),
-        _ => None,
     }
 }

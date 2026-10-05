@@ -1,23 +1,18 @@
-//
-// VALUE FOR CONDTIION TO MEET
-//
+use serde::{Serializer, ser::SerializeStruct};
+use std::fmt;
+
+/// The right-hand side of a condition.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
-pub enum Value<'a> {
-    String(&'a str),
+pub enum Value<'src> {
+    String(&'src str),
     Boolean(bool),
     Number(i64),
     Null,
 }
-impl<'a> Value<'a> {
-    pub fn to_string(&self) -> String {
-        match self {
-            Self::String(s) => format!("\"{}\"", s),
-            Self::Boolean(b) => b.to_string(),
-            Self::Number(n) => n.to_string(),
-            Self::Null => String::from("Null"),
-        }
-    }
-    pub fn get_type(&self) -> &'a str {
+
+impl Value<'_> {
+    /// Type tag used in the JSON output.
+    pub fn type_name(&self) -> &'static str {
         match self {
             Self::String(_) => "string",
             Self::Boolean(_) => "boolean",
@@ -26,20 +21,30 @@ impl<'a> Value<'a> {
         }
     }
 }
-impl serde::ser::Serialize for Value<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::ser::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("Value", 3)?;
-        s.serialize_field("type", &self.get_type())?;
+
+/// Renders the value as rule syntax, quoting strings.
+impl fmt::Display for Value<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Boolean(o) => s.serialize_field("value", o)?,
-            Self::String(o) => s.serialize_field("value", o)?,
-            Self::Number(o) => s.serialize_field("value", o)?,
-            Self::Null => s.serialize_field("value", "null")?,
+            Self::String(string) => write!(f, "\"{}\"", string),
+            Self::Boolean(boolean) => write!(f, "{}", boolean),
+            Self::Number(number) => write!(f, "{}", number),
+            Self::Null => write!(f, "Null"),
         }
-        s.end()
+    }
+}
+
+/// Serialises as `{"type": "<type_name>", "value": <value>}`.
+impl serde::Serialize for Value<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut out = serializer.serialize_struct("Value", 2)?;
+        out.serialize_field("type", self.type_name())?;
+        match self {
+            Self::Boolean(boolean) => out.serialize_field("value", boolean)?,
+            Self::String(string) => out.serialize_field("value", string)?,
+            Self::Number(number) => out.serialize_field("value", number)?,
+            Self::Null => out.serialize_field("value", "null")?,
+        }
+        out.end()
     }
 }

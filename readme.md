@@ -57,6 +57,29 @@ Output syntax:
 
 ```user.accountEnabled -eq True and user.userType -eq "Member" and user.jobTitle -in ["job 1", "job 2"]```
 
+## PROJECT LAYOUT
+
+```
+src/
+├── main.rs              Server setup and routing
+├── model/               Core data types
+│   ├── condition.rs     Property, Condition, ConditionPattern (wildcard matcher)
+│   ├── operator.rs      Operator enum, parsing and syntax strings
+│   ├── value.rs         Condition values
+│   └── rule.rs          Node, Rule, Dnf and Warning
+├── parser/              Syntax text -> Dnf
+│   ├── grammar.pest     pest grammar
+│   └── mod.rs           Walks the parse tree and expands brackets
+├── process/             Dnf transformations
+│   ├── tidy.rs          De-duplication and node ordering
+│   ├── checks.rs        Risk warnings
+│   └── reconstruct.rs   Dnf -> minimal tree / syntax string
+└── routes/              HTTP handlers
+    ├── mod.rs           Shared output options and rendering
+    ├── v1.rs            POST /api/v1 - syntax string input
+    └── v2.rs            POST /api/v2 - list of add/remove actions
+```
+
 ## TEST CASE
 
 (user.accountEnabled -eq True) and (user.userType -eq "Member") and ((user.department -eq "d1" and (user.jobTitle -eq "d1j1" or user.jobTitle -eq "d1j2" or user.jobTitle -eq "d1j3" or user.jobTitle -eq "d1j3")) or (user.department -eq "d2" and (user.jobTitle -eq "d2j1" or user.jobTitle -eq "d2j2" or user.jobTitle -eq "d2j3")) or (user.department -eq "d3" and (user.jobTitle -eq "d3j1" or user.jobTitle -eq "d3j2" or user.jobTitle -eq "d3j3")) or (user.department -eq "d4" and (user.jobTitle -eq "d4j1")) or (user.department -eq "d5" and (user.jobTitle -eq "d5j1")) or (user.department -eq "d6" and (user.jobTitle -eq "d6j1" or user.jobTitle -eq "d6j2" or user.jobTitle -eq "d6j3" or user.jobTitle -eq "d6j4")) or (user.department -eq "d7" and (user.jobTitle -eq "d7j1")))
