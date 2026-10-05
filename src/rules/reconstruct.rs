@@ -7,6 +7,7 @@ use crate::rules::{
     Value,
     Warning,
 };
+use crate::condition::Property;
 
 #[derive(Serialize)]
 pub(crate) enum Block<'a> {
@@ -143,7 +144,7 @@ impl<'a> Group<'a> {
 impl<'a> From<Node<'a>> for Leaf<'a> {
     fn from(node: Node<'a>) -> Self {
         Leaf {
-            property: node.condition.property,
+            property: node.condition.property.0,
             operator: node.condition.operator,
             values: vec![node.condition.value],
             warnings: node.warnings,
@@ -293,7 +294,7 @@ mod tests {
     use crate::rules::{Condition, Rule as Nodes};
 
     fn node<'a>(property: &'a str, operator: Operator, value: Value<'a>) -> Node<'a> {
-        Node::from(Condition { property, operator, value })
+        Node::from(Condition { property: Property(property), operator, value })
     }
 
     fn dnf<'a>(rows: Vec<Vec<Node<'a>>>) -> Dnf<'a> {

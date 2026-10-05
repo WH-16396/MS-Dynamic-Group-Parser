@@ -1,12 +1,4 @@
 
-pub fn validate_property<'j>(property: &'j str) -> Option<&'j str> {
-    let cmp = property.to_lowercase();
-    if cmp.starts_with("user.") || cmp.starts_with("device.") {
-        Some(property)
-    } else {
-        None
-    }
-}
 
 // pub enum DataType {
 //     String(String),

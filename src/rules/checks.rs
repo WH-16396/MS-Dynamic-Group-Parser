@@ -1,14 +1,13 @@
 use crate::{
-    rules::{
-        Rule,
-        Warning,
-        Dnf,
-    },
     condition::{
+        Property,
         Condition,
         ConditionPart, 
         operator::Operator, 
         value::Value
+    },
+    rules::{
+        Dnf, Rule, Warning,
     }
 };
 
@@ -16,7 +15,7 @@ use crate::{
 impl<'a> Condition<'a> {
     pub fn contains(&self, check_node: &ConditionPart) -> bool {
         if match check_node.property {
-                Some(s) => s.eq_ignore_ascii_case(self.property),
+                Some(s) => s == self.property,
                 None => true,
             } &&
             (Some(self.operator) == check_node.operator || !check_node.operator.is_some()) &&
@@ -52,7 +51,7 @@ pub fn check_rules<'a>(dnf: Dnf<'a>) -> Dnf<'a> {
         warnings.push((
             vec![
                 &ConditionPart {
-                    property: Some("user.accountEnabled"),
+                    property: Some(Property("user.accountEnabled")),
                     operator: Some(Operator::Equals),
                     value: Some(Value::Boolean(true))
                 }, 
@@ -71,7 +70,7 @@ pub fn check_rules<'a>(dnf: Dnf<'a>) -> Dnf<'a> {
         warnings.push((
             vec![
                 &ConditionPart {
-                    property: Some("user.userType"),
+                    property: Some(Property("user.userType")),
                     operator: Some(Operator::Equals),
                     value: Some(Value::String("Member"))
                 }, 
@@ -90,13 +89,13 @@ pub fn check_rules<'a>(dnf: Dnf<'a>) -> Dnf<'a> {
         warnings.push((
             vec![
                 &ConditionPart {
-                    property: Some("user.department"),
+                    property: Some(Property("user.department")),
                     operator: Some(Operator::Equals),
                     value: None
                 }, 
             ],
             &ConditionPart {
-                    property: Some("user.jobTitle"),
+                    property: Some(Property("user.jobTitle")),
                     operator: Some(Operator::Equals),
                     value: None
             },

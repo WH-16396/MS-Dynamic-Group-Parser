@@ -6,13 +6,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value::{self, Object}, json};
 use crate::{
     condition::{
+        validate_property,
+        Property,
         Condition, 
         ConditionPart, 
         operator::Operator, 
-        property::{
-            self, 
-            validate_property
-        }, 
+        // property::{
+        //     self, 
+        // }, 
         value::Value as Item,
     }, 
     parse::parser::parse_rulebuilder, 
@@ -77,10 +78,10 @@ pub struct ApiResponse {
 #[derive(Debug)]
 enum InputType<'j> {
     SyntaxAdd(String),
-    SyntaxRemove(String),
+    // SyntaxRemove(String),
     RuleAdd(Vec<Condition<'j>>),
-    RuleRemoveOnly(Vec<ConditionPart<'j>>),
-    RuleRemoveAll(Vec<ConditionPart<'j>>),
+    RuleRemoveMatching(Vec<ConditionPart<'j>>),
+    RuleRemoveContains(Vec<ConditionPart<'j>>),
 }
 
 impl<'j> InputType<'j> {
@@ -117,10 +118,10 @@ impl<'j> InputType<'j> {
                         Value::String(s) => 
                             match s.as_str() {
                                 "syntaxAdd" =>      Ok(InputType::SyntaxAdd(syntax(data.1)?)),
-                                "syntaxRemove" =>   Ok(InputType::SyntaxRemove(syntax(data.1)?)),
+                                // "syntaxRemove" =>   Ok(InputType::SyntaxRemove(syntax(data.1)?)),
                                 "ruleAdd" =>        Ok(InputType::RuleAdd(condition(data.1)?)),
-                                "ruleRemoveOnly" => Ok(InputType::RuleRemoveOnly(condition(data.1)?)),
-                                "ruleRemoveAll" =>  Ok(InputType::RuleRemoveAll(condition(data.1)?)),
+                                "ruleRemoveMatching" => Ok(InputType::RuleRemoveMatching(condition(data.1)?)),
+                                "ruleRemoveContains" =>  Ok(InputType::RuleRemoveContains(condition(data.1)?)),
                                 _ =>                Err(InputErr::TypeParse(val)),
                             },
                         _ => Err(InputErr::TypeParse(val)),
@@ -145,7 +146,7 @@ impl<'j> RuleCondition<'j> for ConditionPart<'j> {
             Value::Object(obj) => Ok(Self {
                 property: match obj.get_key_value("property").ok_or(InputErr::PropertyParse(val))?.1 {
                     Value::String(property) => if property == "*" { None } else { 
-                        Some(validate_property(property).ok_or(InputErr::PropertyParse(val))?) 
+                        Some(validate_property(Property(property)).ok_or(InputErr::PropertyParse(val))?) 
                     },
                     _ => return Err(InputErr::PropertyParse(val)),
                 },
@@ -303,8 +304,8 @@ impl<'j> InputType<'j> {
                     )
                 ]))
             },
-            Self::RuleRemoveOnly(r) => { Ok(ExecType::RemoveAll(r.clone())) },
-            Self::RuleRemoveAll(r) => { Ok(ExecType::RemoveAll(r.clone())) },
+            Self::RuleRemoveMatching(r) => { Ok(ExecType::RemoveMatching(r.clone())) },
+            Self::RuleRemoveContains(r) => { Ok(ExecType::RemoveContains(r.clone())) },
             _ => return Err(ExecErr::SyntaxParse),
         }
     }
@@ -313,8 +314,8 @@ impl<'j> InputType<'j> {
 
 enum ExecType<'a> {
     Add(Dnf<'a>),
-    RemoveOnly(Vec<ConditionPart<'a>>),
-    RemoveAll(Vec<ConditionPart<'a>>),
+    RemoveMatching(Vec<ConditionPart<'a>>),
+    RemoveContains(Vec<ConditionPart<'a>>),
 }
 
 impl<'a> ExecType<'a> {
@@ -324,28 +325,17 @@ impl<'a> ExecType<'a> {
                 dnf.append(&mut a.clone()); 
                 tidy_dnf(dnf.clone())
             },
-            // Self::RemoveOnly(ro) => {
-            //     dnf.into_iter()
-            //         .filter(|rule| 
-            //             iters_equal_anyorder(
-            //                 ro.clone().into_iter(), 
-            //                 rule.nodes.clone().into_iter()
-            //                     .map(|x| ConditionPart::from(x.condition))
-            //             )
-            //         ).collect()
-            // },
-            // Self::RemoveOnly(ro) => {
-            //     dnf.into_iter()
-            //         .filter(|rule| 
-            //             rule.nodes.clone().into_iter()
-            //                 .map(|x| ConditionPart::from(x.condition));
-            //             ro.clone().into_iter()
-            //         ).collect()
-            // },
-            Self::RemoveOnly(ro) => {
-                dnf
+            Self::RemoveMatching(ro) => {
+                dnf.into_iter()
+                    .filter(|rule| 
+                        !iters_equal_anyorder(
+                            ro.clone().into_iter(), 
+                            rule.nodes.clone().into_iter()
+                                .map(|x| ConditionPart::from(x.condition))
+                        )
+                    ).collect()
             },
-            Self::RemoveAll(ra) => {
+            Self::RemoveContains(ra) => {
                 dnf.into_iter().filter(|rule| 
                     ra.iter().fold(
                         false,
@@ -365,26 +355,15 @@ impl<'a> ExecType<'a> {
 }
 
 
-pub fn order_test<'a>(mut parts: Vec<ConditionPart<'a>>) -> Vec<ConditionPart<'a>> {
-    use std::collections::HashMap;
-    let mut map: HashMap<ConditionPart<'_>, i32> = HashMap::new();
-
-    for part in parts.iter() {
-        *map.entry(part.clone()).or_insert(0) += 1;
-    }
-    parts.sort_by(|a, b| 
-        map.get(&b.clone()).unwrap()
-        .cmp(map.get(&a.clone()).unwrap())
-    ); 
-    parts
-}
-
 // https://users.rust-lang.org/t/assert-vectors-equal-in-any-order/38716/10
 use std::{hash::Hash,collections::{HashMap,hash_map::Entry}};
-fn iters_equal_anyorder<T: Eq + Hash>(i1:impl Iterator<Item = T>, i2: impl Iterator<Item = T>) -> bool {
+use std::fmt::Debug;
+fn iters_equal_anyorder<T: Eq + Hash + Debug>(i1:impl Iterator<Item = T>, i2: impl Iterator<Item = T>) -> bool {
+    // println!("\n\n\nITER 1: {:#?}\nITER 2: {:#?}\n\n\n", i1, i2);
     fn get_lookup<T: Eq + Hash>(iter:impl Iterator<Item = T>) -> HashMap<T, usize> {
         let mut lookup = HashMap::<T, usize>::new();
         for value in iter {
+            // println!("{:#?}", value);
             match lookup.entry(value) {
                 Entry::Occupied(entry) => { *entry.into_mut() += 1; },
                 Entry::Vacant(entry) => { entry.insert(0); }
@@ -420,16 +399,83 @@ pub async fn api_handler(Json(req): Json<ApiRequest>) -> Response {
                         }
                     }
                 );
-            
-            Json(ApiResponse {
-                success: true,
-                message: String::from("Success"),
-                json: None,
-                syntax: None, // Some(format!("{:#?}", executed)),
-                rules: None,
-                warnings: Vec::new(),
-                error: serde_json::to_value(tidy_dnf(executed.unwrap())).unwrap(), // Value::Null,
-            }).into_response()},
+
+            match executed {
+                Ok(mut o) => {
+                    
+                    let mut res = ApiResponse {
+                        success: true,
+                        message: String::from("Successfully parsed input"),
+                        // json: serde_json::from_str(&serialize_syntax(&tree)).unwrap(),
+                        json: None,
+                        syntax: None,
+                        rules: None,
+                        warnings: Vec::new(),
+                        error: Value::Null,
+                    };
+
+                    // Cleans the rules e.g. duplicate rules
+                    o = remove_duplicates(o);
+                    o = order_rules(o);
+
+
+                    // If warnings are on then warn on the 
+                    if Some(true) == req.warn_risks {
+                        o = check_rules(o);
+                    }
+
+                    let return_json = 
+                        req.return_json != Some(true) && req.return_syntax != Some(true) && req.return_rules != Some(true) ||
+                        req.return_json == Some(true);
+
+                    if return_json || req.return_syntax == Some(true) {
+                        let tree = reconstruct(&o);
+                        
+                        if return_json {
+                            res.json = tree.as_ref().and_then(|b| serde_json::to_value(b).ok());
+                        }
+
+                        if req.return_syntax == Some(true) {
+                            res.syntax = match tree {
+                                Some(s) => Some(s.to_syntax_string()),
+                                None => None,
+                            };
+                        }
+                    }
+
+                    if req.return_rules == Some(true) {
+                        res.rules = match serde_json::to_value(&o) {
+                            Ok(o) => Some(o),
+                            Err(_) => None,
+                        };
+                    }
+
+                    Json(res).into_response()
+                },
+                    
+                Err(e) => {
+                    println!("{:#?}", e);
+                    Json(ApiResponse {
+                        success: false,
+                        message: String::from("Failed to parse syntax input"),
+                        json: None,
+                        syntax: None,
+                        rules: None,
+                        warnings: Vec::new(),
+                        error: Value::Null,
+                    }).into_response()
+                },
+            }
+        },
+            // Json(ApiResponse {
+            //     success: true,
+            //     message: String::from("Success"),
+            //     json: None,
+            //     syntax: None, // Some(format!("{:#?}", executed)),
+            //     rules: None,
+            //     warnings: Vec::new(),
+            //     error: serde_json::to_value(tidy_dnf(executed.unwrap())).unwrap(), // Value::Null,
+            // }).into_response()},
 
 
         Err(e) => {

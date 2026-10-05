@@ -1,5 +1,6 @@
 use pest::{Parser, error::Error, iterators::Pair};
 use pest_derive::Parser;
+use crate::condition::Property;
 use crate::rules::{
     Node,
     Dnf,
@@ -126,7 +127,7 @@ fn parse_node(pair: Pair<Rule>) -> Option<Vec<Node>> {
         Rule::Number |
         Rule::Null => out.push(
             Node::from(Condition {
-                property,
+                property: Property(property),
                 operator: operator.as_operator(),
                 value: parse_value(value_pair)?,
             })
@@ -134,7 +135,7 @@ fn parse_node(pair: Pair<Rule>) -> Option<Vec<Node>> {
         Rule::Array => {
             for value in value_pair.into_inner() {
                 out.push(Node::from(Condition{
-                    property,
+                    property: Property(property),
                     operator: operator.as_operator().as_single(),
                     value: parse_value(value)?,
                 }));
